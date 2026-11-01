@@ -82,7 +82,7 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
             return event
         }
 
-        NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
+        NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] event in
             guard let self, event.window === panel || (screenPanel != nil && event.window === screenPanel) else { return event }
             return model.handle(event) ? nil : event
         }
@@ -159,6 +159,7 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
         case .gba: 2
         case .nds, .nes, .snes, .sms: 1.5
         case .md: 1.25
+        case .apple2: 1
         }
     }
 

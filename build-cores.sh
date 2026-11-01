@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Downloads pinned emulator core sources (mGBA, melonDS DS, FCEUmm, bsnes, Gearsystem, clownmdemu) without their ROM/save test folders, then builds them into BuiltCores/.
+# Downloads pinned emulator core sources (mGBA, melonDS DS, FCEUmm, bsnes, Gearsystem, clownmdemu, AppleWin) without their ROM/save test folders, then builds them into BuiltCores/.
 # Needs: brew install cmake ninja. Delete the relevant cores/ subfolder before changing a pinned revision.
 set -e
 cd "$(dirname "$0")"
@@ -23,6 +23,13 @@ fetch_core melonds-ds JesseTG/melonds-ds f394adbacb5722ee97c1b37c8064da9a2581831
 fetch_core fceumm libretro/libretro-fceumm ac0d00a7fc01166f84c7bac01d1084ebfd2b865e
 fetch_core bsnes libretro/bsnes 63ee22f7af8f5d1ada295c2c98fd7bf261fa62a7
 fetch_core gearsystem drhelius/Gearsystem 40b8eebab53007c976eb29755b1ef7925140c37f
+# Apple IIe. Apple's ROMs are left out of the build (patches/applewin-user-roms.patch); the core reads the user's own
+# from the BIOS folder.
+if [[ -z "$(ls -A cores/applewin 2>/dev/null)" ]]; then
+  fetch_core applewin audetto/AppleWin 0a89db3d593a74d04590b902fb7206723591f445
+  patch -d cores/applewin -p1 < patches/applewin-user-roms.patch
+  rm -f cores/applewin/resource/*.rom cores/applewin/resource/*.ROM
+fi
 # clownmdemu keeps its emulator in git submodules, which GitHub's tarballs leave out.
 if [[ -z "$(ls -A cores/clownmdemu 2>/dev/null)" ]]; then
   git clone -q https://github.com/Clownacy/clownmdemu-libretro cores/clownmdemu
@@ -44,6 +51,10 @@ J=$(sysctl -n hw.ncpu)
 make -C cores/fceumm -f Makefile.libretro -j$J platform=osx arch=arm64
 make -C cores/bsnes/bsnes -j$J target=libretro binary=library platform=macos local=false compiler="clang++ -ffile-prefix-map=$PWD=."
 make -C cores/gearsystem/platforms/libretro -j$J platform=osx arch=arm64
+cmake -S cores/applewin -B $B/applewin -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_C_FLAGS="-ffile-prefix-map=$PWD=." -DCMAKE_CXX_FLAGS="-ffile-prefix-map=$PWD=." \
+  -DBUILD_LIBRETRO=ON -DENABLE_NETWORKING=OFF
+ninja -C $B/applewin applewin_libretro
 cmake -S cores/clownmdemu -B $B/clownmdemu -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
 ninja -C $B/clownmdemu
 mkdir -p BuiltCores
@@ -55,4 +66,5 @@ cp cores/bsnes/bsnes/out/bsnes_libretro.dylib BuiltCores/bsnes.libretro
 strip -S -x BuiltCores/bsnes.libretro # its debug map lists every build folder path
 cp cores/gearsystem/platforms/libretro/gearsystem_libretro.dylib BuiltCores/gearsystem.libretro
 cp $B/clownmdemu/clownmdemu_libretro.dylib BuiltCores/clownmdemu.libretro
+cp $B/applewin/source/frontends/libretro/applewin_libretro.dylib BuiltCores/applewin.libretro
 echo "Cores copied to BuiltCores/"

@@ -289,7 +289,7 @@ struct Cheat: Codable, Identifiable, Equatable {
 
 /// The console a ROM is for, from its file extension. Raw values are saved (window scale per system), so keep them.
 enum GameSystem: String, CaseIterable, Identifiable {
-    case gb, gbc, gba, nds, nes, snes, md, sms, gg
+    case gb, gbc, gba, nds, nes, snes, md, sms, gg, apple2
 
     var id: String { rawValue }
 
@@ -304,6 +304,7 @@ enum GameSystem: String, CaseIterable, Identifiable {
         switch self {
         case .snes: ["sfc", "smc"]
         case .md: ["md", "gen"]
+        case .apple2: ["dsk", "do", "po", "woz"]
         default: [rawValue]
         }
     }
@@ -317,6 +318,7 @@ enum GameSystem: String, CaseIterable, Identifiable {
         case .snes: "bsnes"
         case .md: "clownmdemu"
         case .sms, .gg: "gearsystem"
+        case .apple2: "applewin"
         }
     }
 
@@ -330,6 +332,7 @@ enum GameSystem: String, CaseIterable, Identifiable {
         case .snes: CGSize(width: 256, height: 224)
         case .md: CGSize(width: 320, height: 224)
         case .sms: CGSize(width: 256, height: 192)
+        case .apple2: CGSize(width: 560, height: 384)
         }
     }
 
@@ -344,6 +347,7 @@ enum GameSystem: String, CaseIterable, Identifiable {
         case .md: "Genesis"
         case .sms: "SMS"
         case .gg: "GG"
+        case .apple2: "Apple II"
         }
     }
 
@@ -358,6 +362,7 @@ enum GameSystem: String, CaseIterable, Identifiable {
         case .md: "Sega Genesis"
         case .sms: "Sega Master System"
         case .gg: "Sega Game Gear"
+        case .apple2: "Apple IIe"
         }
     }
 
@@ -372,6 +377,7 @@ enum GameSystem: String, CaseIterable, Identifiable {
         case .md: 0x3D4255
         case .sms: 0x2F6FB8
         case .gg: 0x2E9C8F
+        case .apple2: 0xB49A6A
         }
     }
 }

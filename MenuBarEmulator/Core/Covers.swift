@@ -115,7 +115,7 @@ final class Covers {
     }
 
     static func url(name: String, system: GameSystem) -> URL? {
-        let repo = switch system {
+        let repo: String? = switch system {
         case .gb: "Nintendo_-_Game_Boy"
         case .gbc: "Nintendo_-_Game_Boy_Color"
         case .gba: "Nintendo_-_Game_Boy_Advance"
@@ -125,7 +125,9 @@ final class Covers {
         case .md: "Sega_-_Mega_Drive_-_Genesis"
         case .sms: "Sega_-_Master_System_-_Mark_III"
         case .gg: "Sega_-_Game_Gear"
+        case .apple2: nil // libretro-thumbnails has no Apple II set
         }
+        guard let repo else { return nil }
         // libretro-thumbnails replaces these characters in file names.
         let safe = String(name.map { "&*/:`<>?\\|\"".contains($0) ? "_" : $0 })
         guard let encoded = safe.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: ",+"))) else { return nil }

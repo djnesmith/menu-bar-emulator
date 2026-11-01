@@ -463,6 +463,13 @@ final class AppModel {
 
     /// Every key the window gets comes here first. Returns true when it was used.
     func handle(_ event: NSEvent) -> Bool {
+        // An Apple II game gets every key (⌘ shortcuts excepted): its keyboard is the whole controller.
+        if screen == .game, panel == nil, sheet == nil, recordingShortcut == nil, controls.capturing == nil,
+           emulator.hasKeyboard, !event.modifierFlags.contains(.command) {
+            if let key = RetroKey(event) { emulator.type(key) }
+            return event.type != .flagsChanged
+        }
+        if event.type == .flagsChanged { return false }
         let down = event.type == .keyDown
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
         let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""

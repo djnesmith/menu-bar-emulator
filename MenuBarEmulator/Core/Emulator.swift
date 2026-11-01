@@ -91,6 +91,10 @@ final class Emulator {
     @ObservationIgnored private var sampleRate = 32768.0
     @ObservationIgnored private var pixelFormat = RETRO_PIXEL_FORMAT_0RGB1555.rawValue
     @ObservationIgnored private var keyButtons = Set<UInt32>()
+    /// The Apple II core's keyboard, and keys waiting for the next frame (the core is only touched between frames).
+    @ObservationIgnored private var keyboard: retro_keyboard_event_t?
+    @ObservationIgnored private var typedKeys: [RetroKey] = []
+    @ObservationIgnored private var playingCore = ""
     @ObservationIgnored private var pressed = Set<UInt32>()
     @ObservationIgnored private var pointer: (x: Int16, y: Int16, down: Bool) = (0, 0, false)
     @ObservationIgnored private let audio = AudioPlayer()
@@ -157,12 +161,21 @@ final class Emulator {
         stop()
         error = nil
         let name = GameSystem(rom: rom)?.core ?? "mgba"
+        if name == "applewin" {
+            let missing = Self.appleIIeROMs.filter { !FileManager.default.fileExists(atPath: library.root.appending(path: "BIOS/\($0)").path) }
+            guard missing.isEmpty else {
+                return fail("Apple IIe disks need Apple's ROM files. Add \(missing.joined(separator: ", ")) to your library (they go in the BIOS folder).")
+            }
+        }
         guard let core = loadCore(name) else { return fail("Couldn't load the \(name) emulator.") }
         // Memory-mapped: big DS ROMs open without copying the whole file first.
         guard let data = try? Data(contentsOf: rom, options: .alwaysMapped) else { return fail("Couldn't read \(rom.lastPathComponent).") }
 
         activeEmulator = self
         keyButtons = []
+        keyboard = nil
+        typedKeys = []
+        playingCore = name
         turboHeld = []
         pressed = []
         previousPixels = nil
@@ -227,6 +240,7 @@ final class Emulator {
             core.deinitialize()
         }
         core = nil
+        keyboard = nil
         sync()
         game = nil
         frame = nil
@@ -256,6 +270,7 @@ final class Emulator {
             stopClock()
             audio.stop()
             keyButtons = []
+            typedKeys = []
             pointer.down = false
             holdingRewindKey = false
             updateRewind()
@@ -268,6 +283,10 @@ final class Emulator {
 
     private func tick() {
         guard let core, !batchRunning else { return } // a fast-forward batch is still going; it picks up from there
+        if let keyboard, !typedKeys.isEmpty {
+            for key in typedKeys { keyboard(key.down, key.code, key.character, key.modifiers) }
+            typedKeys = []
+        }
         let now = CACurrentMediaTime()
         let elapsed = now - lastTick
         lastTick = now
@@ -747,6 +766,18 @@ final class Emulator {
 
     // MARK: Input
 
+    /// Apple's ROMs that AppleWin needs to boot a disk (AppleWin's own file names). The user supplies them.
+    static let appleIIeROMs = ["Apple2e_Enhanced.rom", "Apple2e_Enhanced_Video.rom", "DISK2.rom"]
+
+    /// True while the game reads a real keyboard (the Apple II): every key goes to it instead of the app.
+    var hasKeyboard: Bool { keyboard != nil }
+
+    /// Queues a key for the game's keyboard; it reaches the core before the next frame.
+    func type(_ key: RetroKey) {
+        guard isRunning, keyboard != nil else { return }
+        typedKeys.append(key)
+    }
+
     /// Handles a key while the game screen is up. Returns true when the key is bound, so the caller can swallow it.
     func handleKey(_ keyCode: UInt16, down: Bool, isRepeat: Bool = false) -> Bool {
         guard game != nil, showingGame, let action = controls.action(for: keyCode) else { return false }
@@ -819,6 +850,8 @@ final class Emulator {
             pixelFormat = format
         case RETRO_ENVIRONMENT_GET_LOG_INTERFACE:
             data.assumingMemoryBound(to: retro_log_callback.self).pointee.log = host_log_callback()
+        case RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK where playingCore == "applewin":
+            keyboard = data.assumingMemoryBound(to: retro_keyboard_callback.self).pointee.callback
         case RETRO_ENVIRONMENT_GET_CAN_DUPE:
             data.assumingMemoryBound(to: Bool.self).pointee = true
         case RETRO_ENVIRONMENT_GET_VARIABLE:

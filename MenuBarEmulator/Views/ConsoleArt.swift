@@ -19,6 +19,7 @@ struct ConsoleArt: View {
             case .md: art.genesisPad()
             case .sms: art.masterSystemPad()
             case .gg: art.gameGear()
+            case .apple2: art.appleIIe()
             }
         }
         .aspectRatio(1, contentMode: .fit)
@@ -206,6 +207,27 @@ private struct Art {
         dpad(29, 50, 8.5, 0x0E0E11)
         circle(64, 53, 5, color(0xB8323A))
         circle(77, 47, 5, color(0xB8323A))
+    }
+
+    func appleIIe() {
+        let monitor = rect(22, 10, 56, 44)
+        shadow(monitor, radius: 4)
+        fill(monitor, gradient(monitor, 0xD9CDB2, 0xBDAF92), radius: 4)
+        fill(rect(28, 15, 44, 32), color(0x1C1E1A), radius: 3)
+        fill(rect(31, 18, 38, 26), color(0x0F2A12), radius: 2)
+        for (i, w) in [24.0, 30, 18, 27].enumerated() {
+            fill(rect(34, 21 + Double(i) * 5, w, 2.2), color(0x4BE36A, 0.85))
+        }
+        let body = rect(8, 58, 84, 30)
+        shadow(body, radius: 3)
+        fill(body, gradient(body, 0xD9CDB2, 0xB8A98B), radius: 3)
+        fill(rect(14, 63, 72, 22), color(0x8C7F68), radius: 1.5)
+        for row in 0..<3 {
+            for col in 0..<11 {
+                fill(rect(16 + Double(col) * 6.3, 65 + Double(row) * 5.2, 5, 4.2), color(0x4A443A), radius: 0.8)
+            }
+        }
+        fill(rect(30, 80.5, 40, 3), color(0x4A443A), radius: 0.8) // space bar
     }
 
     func gameGear() {
