@@ -204,7 +204,6 @@ private struct MainSettings: View {
             }
 
             SettingsGroup(title: "About") {
-                linkRow("Check for Updates", symbol: "arrow.triangle.2.circlepath", id: "check-updates") { model.checkForUpdates() }
                 linkRow("Welcome Tour", symbol: "sparkles", id: "tour") { model.replayOnboarding() }
                 linkRow("Credits and Licenses", symbol: "doc.text", id: "credits") { model.sheet = .credits }
                 linkRow("Reset to Factory Settings…", symbol: "arrow.counterclockwise", id: "factory-reset", destructive: true) { model.sheet = .reset }
