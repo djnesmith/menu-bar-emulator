@@ -1,6 +1,6 @@
 # Menu Bar Emulator
 
-Game Boy, GBA, DS, NES, SNES, Genesis, Master System and Game Gear games, living in your Mac's menu bar. Click the icon (or press your shortcut), play, and click away: it pauses and saves itself.
+Game Boy, GBA, DS, NES, SNES, Genesis, Master System, Game Gear and Apple IIe games, living in your Mac's menu bar. Click the icon (or press your shortcut), play, and click away: it pauses and saves itself.
 
 **Early build.** Things might break. Feedback and tips: [ko-fi.com/kian](https://ko-fi.com/kian)
 
@@ -44,8 +44,9 @@ Tests run with ⌘U. Tests requiring real ROMs are skipped unless optional devel
 - [bsnes](https://github.com/libretro/bsnes) (SNES): GNU GPL 3.0
 - [clownmdemu](https://github.com/Clownacy/clownmdemu-libretro) (Genesis): GNU AGPL 3.0
 - [Gearsystem](https://github.com/drhelius/Gearsystem) (Master System, Game Gear): GNU GPL 3.0
+- [AppleWin](https://github.com/audetto/AppleWin) (Apple IIe): GNU GPL 2.0
 - [libretro-common](https://github.com/libretro/libretro-common): MIT. Box art from [libretro-thumbnails](https://github.com/libretro-thumbnails/libretro-thumbnails); it belongs to its owners.
 
 This app is released under the **GNU GPL 3.0** (see `LICENSE`), because it ships with GPL-licensed melonDS.
 
-Game Boy, Game Boy Color, Game Boy Advance, Nintendo DS, NES and Super Nintendo are trademarks of Nintendo; Genesis, Master System and Game Gear are trademarks of Sega. This project isn't affiliated with or endorsed by Nintendo or Sega.
+Game Boy, Game Boy Color, Game Boy Advance, Nintendo DS, NES and Super Nintendo are trademarks of Nintendo; Genesis, Master System and Game Gear are trademarks of Sega; Apple IIe is a trademark of Apple. This project isn't affiliated with or endorsed by Nintendo, Sega or Apple.

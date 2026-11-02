@@ -46,6 +46,8 @@ enum AppInfo {
                license: "GNU AGPL 3.0", url: "https://github.com/Clownacy/clownmdemu-libretro"),
         Credit(name: "Gearsystem", detail: "Master System and Game Gear emulation, by Ignacio Sánchez",
                license: "GNU GPL 3.0", url: "https://github.com/drhelius/Gearsystem"),
+        Credit(name: "AppleWin", detail: "Apple IIe emulation, by Michael O'Brien, Oliver Schmidt, Tom Charlesworth and contributors; libretro version by Andrea Odetti",
+               license: "GNU GPL 2.0", url: "https://github.com/audetto/AppleWin"),
         Credit(name: "libretro", detail: "The emulator interface (libretro.h, libretro-common)",
                license: "MIT", url: "https://github.com/libretro/libretro-common"),
         Credit(name: "libretro-thumbnails", detail: "Box art, downloaded when you add a game",

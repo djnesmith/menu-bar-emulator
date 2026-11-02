@@ -246,7 +246,7 @@ struct CreditsSheet: View {
                 .help(credit.url)
                 .padFocusable("credit-\(credit.name)", cornerRadius: 13) { NSWorkspace.shared.open(URL(string: credit.url)!) }
             }
-            Text("Game Boy, Game Boy Advance, Nintendo DS, NES and Super Nintendo are trademarks of Nintendo; Genesis, Master System and Game Gear are trademarks of Sega. This app isn't affiliated with Nintendo and comes with no games: only play games you own.")
+            Text("Game Boy, Game Boy Advance, Nintendo DS, NES and Super Nintendo are trademarks of Nintendo; Genesis, Master System and Game Gear are trademarks of Sega; Apple IIe is a trademark of Apple. This app isn't affiliated with Nintendo and comes with no games: only play games you own.")
                 .font(.system(size: 10.5))
                 .foregroundStyle(theme.subtext)
                 .fixedSize(horizontal: false, vertical: true)

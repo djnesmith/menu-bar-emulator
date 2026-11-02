@@ -670,7 +670,7 @@ private struct EmptyLibrary: View {
             FloatingConsoles(size: 70)
             VStack(spacing: 7) {
                 Text("Your games live here").font(theme.display(22, .heavy))
-                Text("Add Game Boy, GBA, DS, NES, SNES, Genesis,\nMaster System and Game Gear games. Drop files or a folder anywhere.")
+                Text("Add Game Boy, GBA, DS, NES, SNES, Genesis, Master System,\nGame Gear and Apple IIe games. Drop files or a folder anywhere.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(theme.subtext)
                     .multilineTextAlignment(.center)
@@ -700,8 +700,10 @@ struct FloatingConsoles: View {
     @State private var floating = false
 
     var body: some View {
+        // Six consoles in the width five used to take.
+        let size = size * 5 / 6
         HStack(spacing: size * 0.08) {
-            ForEach(Array([GameSystem.gb, .snes, .gba, .md, .nds].enumerated()), id: \.element) { index, system in
+            ForEach(Array([GameSystem.gb, .snes, .gba, .md, .nds, .apple2].enumerated()), id: \.element) { index, system in
                 ConsoleArt(system: system)
                     .frame(width: size, height: size)
                     .offset(y: floating ? -size * 0.06 : size * 0.06)

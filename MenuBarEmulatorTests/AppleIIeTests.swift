@@ -11,6 +11,7 @@ final class AppleIIeTests: EmulatorTestCase {
         XCTAssertNil(GameSystem(rom: URL(filePath: "/x/Apple2e_Enhanced.rom")))
         XCTAssertEqual(GameSystem.apple2.core, "applewin")
         XCTAssertNil(Covers.url(name: "Oregon Trail", system: .apple2), "libretro-thumbnails has no Apple II set")
+        XCTAssertEqual(AppInfo.credits.first { $0.name == "AppleWin" }?.license, "GNU GPL 2.0", "GPL needs the credit")
 
         let library = Library(root: temp.appending(path: "Library"))
         let result = library.importFiles([try makeFile("Oregon Trail.dsk"), try makeFile("DISK2.rom")])
