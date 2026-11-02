@@ -1,6 +1,6 @@
-diff -ruN applewin.orig/resource/CMakeLists.txt applewin/resource/CMakeLists.txt
---- a/resource/CMakeLists.txt	2026-11-01 10:40:46
-+++ b/resource/CMakeLists.txt	2026-11-01 10:40:48
+diff -ruN a/resource/CMakeLists.txt b/resource/CMakeLists.txt
+--- a/resource/CMakeLists.txt	2026-11-02 17:57:53
++++ b/resource/CMakeLists.txt	2026-11-02 17:57:53
 @@ -1,34 +1,11 @@
  include(CMakeResources.cmake)
  
@@ -44,9 +44,9 @@ diff -ruN applewin.orig/resource/CMakeLists.txt applewin/resource/CMakeLists.txt
    )
  
  add_library(apple2roms STATIC
-diff -ruN applewin.orig/source/frontends/common2/gnuframe.cpp applewin/source/frontends/common2/gnuframe.cpp
---- a/source/frontends/common2/gnuframe.cpp	2026-11-01 10:40:46
-+++ b/source/frontends/common2/gnuframe.cpp	2026-11-01 10:41:00
+diff -ruN a/source/frontends/common2/gnuframe.cpp b/source/frontends/common2/gnuframe.cpp
+--- a/source/frontends/common2/gnuframe.cpp	2026-11-02 17:57:53
++++ b/source/frontends/common2/gnuframe.cpp	2026-11-02 17:57:53
 @@ -2,6 +2,7 @@
  #include "frontends/common2/gnuframe.h"
  #include "frontends/common2/utils.h"
@@ -66,6 +66,15 @@ diff -ruN applewin.orig/source/frontends/common2/gnuframe.cpp applewin/source/fr
  
  namespace
  {
+@@ -47,7 +52,7 @@
+         std::vector<std::filesystem::path> paths;
+         if (std::filesystem::exists(executable))
+         {
+-            const auto root = std::filesystem::canonical(executable.parent_path() / ROOT_PATH);
++            const auto root = std::filesystem::weakly_canonical(executable.parent_path() / ROOT_PATH);
+             paths.push_back(root);
+         }
+ 
 @@ -80,14 +85,72 @@
          LogFileOutput("Program Dir: '%s'\n", g_sProgramDir.c_str());
      }
@@ -141,9 +150,9 @@ diff -ruN applewin.orig/source/frontends/common2/gnuframe.cpp applewin/source/fr
      }
  
      std::string GNUFrame::Video_GetScreenShotFolder() const
-diff -ruN applewin.orig/source/frontends/common2/gnuframe.h applewin/source/frontends/common2/gnuframe.h
---- a/source/frontends/common2/gnuframe.h	2026-11-01 10:40:46
-+++ b/source/frontends/common2/gnuframe.h	2026-11-01 10:40:48
+diff -ruN a/source/frontends/common2/gnuframe.h b/source/frontends/common2/gnuframe.h
+--- a/source/frontends/common2/gnuframe.h	2026-11-02 17:57:53
++++ b/source/frontends/common2/gnuframe.h	2026-11-02 17:57:53
 @@ -6,6 +6,9 @@
  namespace common2
  {
@@ -154,9 +163,9 @@ diff -ruN applewin.orig/source/frontends/common2/gnuframe.h applewin/source/fron
      class GNUFrame : public CommonFrame
      {
      public:
-diff -ruN applewin.orig/source/frontends/libretro/libretro.cpp applewin/source/frontends/libretro/libretro.cpp
---- a/source/frontends/libretro/libretro.cpp	2026-11-01 10:40:46
-+++ b/source/frontends/libretro/libretro.cpp	2026-11-01 10:40:55
+diff -ruN a/source/frontends/libretro/libretro.cpp b/source/frontends/libretro/libretro.cpp
+--- a/source/frontends/libretro/libretro.cpp	2026-11-02 17:57:53
++++ b/source/frontends/libretro/libretro.cpp	2026-11-02 17:57:53
 @@ -11,6 +11,7 @@
  #include "linux/paddle.h"
  
@@ -178,9 +187,9 @@ diff -ruN applewin.orig/source/frontends/libretro/libretro.cpp applewin/source/f
  
      try
      {
-diff -ruN applewin.orig/source/linux/linuxframe.cpp applewin/source/linux/linuxframe.cpp
---- a/source/linux/linuxframe.cpp	2026-11-01 10:40:46
-+++ b/source/linux/linuxframe.cpp	2026-11-01 10:40:48
+diff -ruN a/source/linux/linuxframe.cpp b/source/linux/linuxframe.cpp
+--- a/source/linux/linuxframe.cpp	2026-11-02 17:57:53
++++ b/source/linux/linuxframe.cpp	2026-11-02 17:57:53
 @@ -130,6 +130,12 @@
  {
      const auto resource = GetResourceData(id);

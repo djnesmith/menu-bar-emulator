@@ -31,6 +31,26 @@ final class AppleIIeTests: EmulatorTestCase {
         XCTAssertFalse(error.contains("DISK2.rom"), "only the missing ones are named")
     }
 
+    /// AppleWin looked for its program folder next to the app and threw when it wasn't there, so no disk ever started.
+    /// Zero-filled stand-ins under the ROMs' names are enough: the load failed before any ROM was read.
+    func testDiskStartsWithROMsInPlace() throws {
+        let library = Library(root: temp.appending(path: "Library"))
+        let disk = temp.appending(path: "Blank.dsk")
+        try Data(count: 143_360).write(to: disk)
+        var files = [disk]
+        for (name, size) in zip(Emulator.appleIIeROMs, [16_384, 4_096, 256]) {
+            let rom = temp.appending(path: name)
+            try Data(count: size).write(to: rom)
+            files.append(rom)
+        }
+        library.importFiles(files)
+        let emulator = makeEmulator(library)
+        emulator.play(try XCTUnwrap(library.roms.first))
+        defer { emulator.stop() }
+        XCTAssertNil(emulator.error)
+        XCTAssertNotNil(emulator.game)
+    }
+
     func testKeysBecomeLibretroKeys() throws {
         let a = try XCTUnwrap(RetroKey(key(0, "a")))
         XCTAssertEqual([a.code, a.character], [97, 97])
