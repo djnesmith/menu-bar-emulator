@@ -412,6 +412,14 @@ private struct ControlBar: View {
             if model.openGames.count > 1 { Button("Open Games…") { model.togglePanel(.games) } }
             Button("Controls…" + key(.help)) { model.togglePanel(.help) }
             Divider()
+            if !emulator.disks.isEmpty {
+                Menu("Change Disk  ⌘D") {
+                    ForEach(Array(emulator.disks.enumerated()), id: \.offset) { index, disk in
+                        Toggle("Disk \(index + 1): \(disk.deletingPathExtension().lastPathComponent)",
+                               isOn: Binding { emulator.currentDisk == index } set: { _ in emulator.insertDisk(index) })
+                    }
+                }
+            }
             Button("Take Screenshot" + key(.screenshot)) { emulator.screenshot() }
             if emulator.canUndoLoad { Button("Undo Load") { emulator.undoLoad() } }
             Button(emulator.soundOn ? "Mute" + key(.mute) : "Unmute" + key(.mute)) { emulator.soundOn.toggle() }

@@ -31,24 +31,77 @@ final class AppleIIeTests: EmulatorTestCase {
         XCTAssertFalse(error.contains("DISK2.rom"), "only the missing ones are named")
     }
 
-    /// AppleWin looked for its program folder next to the app and threw when it wasn't there, so no disk ever started.
-    /// Zero-filled stand-ins under the ROMs' names are enough: the load failed before any ROM was read.
-    func testDiskStartsWithROMsInPlace() throws {
+    /// A library with zero-filled stand-ins for Apple's ROMs and blank disks (no Apple data).
+    private func libraryWithBlankDisks(_ names: [String]) throws -> Library {
         let library = Library(root: temp.appending(path: "Library"))
-        let disk = temp.appending(path: "Blank.dsk")
-        try Data(count: 143_360).write(to: disk)
-        var files = [disk]
+        var files: [URL] = []
+        for name in names {
+            let disk = temp.appending(path: name)
+            try Data(count: 143_360).write(to: disk)
+            files.append(disk)
+        }
         for (name, size) in zip(Emulator.appleIIeROMs, [16_384, 4_096, 256]) {
             let rom = temp.appending(path: name)
             try Data(count: size).write(to: rom)
             files.append(rom)
         }
         library.importFiles(files)
+        return library
+    }
+
+    /// AppleWin looked for its program folder next to the app and threw when it wasn't there, so no disk ever started.
+    /// Zero-filled stand-ins under the ROMs' names are enough: the load failed before any ROM was read.
+    func testDiskStartsWithROMsInPlace() throws {
+        let library = try libraryWithBlankDisks(["Blank.dsk"])
         let emulator = makeEmulator(library)
         emulator.play(try XCTUnwrap(library.roms.first))
         defer { emulator.stop() }
         XCTAssertNil(emulator.error)
         XCTAssertNotNil(emulator.game)
+    }
+
+    func testMultiDiskGamesAreOneGame() throws {
+        func names(_ files: [String]) -> [[String]] {
+            DiskSets.group(files.map { URL(filePath: "/x/\($0)") }).values.map { $0.map(\.lastPathComponent) }.sorted { $0[0] < $1[0] }
+        }
+        XCTAssertEqual(names(["cap2.dsk", "cap1.dsk"]), [["cap1.dsk", "cap2.dsk"]])
+        XCTAssertEqual(names(["Ultima (Disk 2 of 2).dsk", "Ultima (Disk 1 of 2).dsk"]),
+                       [["Ultima (Disk 1 of 2).dsk", "Ultima (Disk 2 of 2).dsk"]])
+        XCTAssertEqual(names(["Karateka - Side B.woz", "Karateka - Side A.woz"]), [["Karateka - Side A.woz", "Karateka - Side B.woz"]])
+        XCTAssertEqual(names(["Game Disk 1.do", "game disk 2.do", "Game Disk 3.do"]).first?.count, 3)
+        XCTAssertEqual(names(["Ultima 4.dsk", "Ultima 5.dsk"]), [], "a sequel isn't a second disk")
+        XCTAssertEqual(names(["cap2.dsk"]), [], "one disk isn't a set")
+        XCTAssertEqual(names(["Pokemon1.gba", "Pokemon2.gba"]), [], "Apple II only")
+
+        let library = try libraryWithBlankDisks(["cap1.dsk", "cap2.dsk", "Oregon Trail.dsk"])
+        XCTAssertEqual(library.roms.map(\.lastPathComponent).sorted(), ["Oregon Trail.dsk", "cap1.dsk"], "disk 2 is part of cap1")
+        XCTAssertEqual(library.diskSets.values.first?.map(\.lastPathComponent), ["cap1.dsk", "cap2.dsk"])
+    }
+
+    func testSwappingDisks() throws {
+        let library = try libraryWithBlankDisks(["cap1.dsk", "cap2.dsk", "Oregon Trail.dsk"])
+        // One emulator, like the app: AppleWin is one machine, so a second Emulator would share (and break) it.
+        let emulator = makeEmulator(library)
+        emulator.play(try XCTUnwrap(library.roms.first))
+        XCTAssertNil(emulator.error)
+        XCTAssertEqual(emulator.disks.map(\.lastPathComponent), ["cap1.dsk", "cap2.dsk"])
+        XCTAssertEqual(emulator.currentDisk, 0)
+        emulator.insertDisk(1)
+        XCTAssertEqual(emulator.currentDisk, 1, "the core reports disk 2 in the drive")
+        emulator.nextDisk()
+        XCTAssertEqual(emulator.currentDisk, 0, "Next Disk wraps around")
+        emulator.insertDisk(1)
+        emulator.stop()
+
+        emulator.play(try XCTUnwrap(library.roms.first))
+        XCTAssertEqual(emulator.currentDisk, 1, "coming back resumes with disk 2 in the drive")
+        emulator.stop()
+
+        let single = try XCTUnwrap(library.roms.first { $0.lastPathComponent == "Oregon Trail.dsk" })
+        emulator.play(single)
+        defer { emulator.stop() }
+        XCTAssertNil(emulator.error)
+        XCTAssertEqual(emulator.disks, [], "no Change Disk for a one-disk game")
     }
 
     func testKeysBecomeLibretroKeys() throws {

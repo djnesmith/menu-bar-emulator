@@ -141,6 +141,10 @@ private struct GameMenuPanel: View {
             Item(id: "silent", title: model.prefs.silentGames ? "All Sound: Off" : "All Sound: On",
                  symbol: model.prefs.silentGames ? "speaker.slash.fill" : "speaker.wave.2.fill") { model.toggleSilentGames() },
         ]
+        if !emulator.disks.isEmpty {
+            items.insert(Item(id: "disk", title: "Next Disk (now \(emulator.currentDisk + 1) of \(emulator.disks.count))",
+                              symbol: "opticaldiscdrive.fill") { emulator.nextDisk() }, at: 3)
+        }
         if emulator.canUndoLoad {
             items.insert(Item(id: "undo", title: "Undo Load", symbol: "arrow.uturn.backward") { emulator.undoLoad() }, at: 3)
         }

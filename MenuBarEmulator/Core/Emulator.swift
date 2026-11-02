@@ -72,6 +72,9 @@ final class Emulator {
     private(set) var measuredFPS = 0.0
     /// The last Load can be taken back (Undo Load).
     private(set) var canUndoLoad = false
+    /// A multi-disk Apple II game's disks, and which one is in the drive. Empty for everything else.
+    private(set) var disks: [URL] = []
+    private(set) var currentDisk = 0
 
     let library: Library
     let controls: Controls
@@ -94,6 +97,7 @@ final class Emulator {
     /// The Apple II core's keyboard, and keys waiting for the next frame (the core is only touched between frames).
     @ObservationIgnored private var keyboard: retro_keyboard_event_t?
     @ObservationIgnored private var typedKeys: [RetroKey] = []
+    @ObservationIgnored private var diskControl: retro_disk_control_ext_callback?
     @ObservationIgnored private var playingCore = ""
     @ObservationIgnored private var pressed = Set<UInt32>()
     @ObservationIgnored private var pointer: (x: Int16, y: Int16, down: Bool) = (0, 0, false)
@@ -175,6 +179,9 @@ final class Emulator {
         keyButtons = []
         keyboard = nil
         typedKeys = []
+        diskControl = nil
+        disks = []
+        currentDisk = 0
         playingCore = name
         turboHeld = []
         pressed = []
@@ -191,7 +198,10 @@ final class Emulator {
         core.setInputState(inputStateCallback)
         core.initialize()
 
-        let loaded = rom.path.withCString { path in
+        // A multi-disk game loads as a playlist of its disks; AppleWin reads files by path, so `data` goes unused.
+        let set = library.diskSets[rom] ?? []
+        let path = set.count > 1 ? ((try? DiskSets.playlist(for: set)) ?? rom).path : rom.path
+        let loaded = path.withCString { path in
             data.withUnsafeBytes { bytes in
                 var info = retro_game_info(path: path, data: bytes.baseAddress, size: bytes.count, meta: nil)
                 return core.loadGame(&info)
@@ -212,9 +222,11 @@ final class Emulator {
         gameData = data
         self.core = core
         game = rom
+        if set.count > 1, diskControl?.get_num_images?() == UInt32(set.count) { disks = set }
         cheatsSupported = core.cheatReset != nil && core.cheatSet != nil
         loadSRAM()
         if hasState(Self.autoSlot) { loadState(Self.autoSlot, announce: false) } // pick up exactly where you left off
+        readDisk()
         applyCheats(library.cheats(for: rom))
         configureRewind()
         fastForward = false
@@ -241,6 +253,8 @@ final class Emulator {
         }
         core = nil
         keyboard = nil
+        diskControl = nil
+        disks = []
         sync()
         game = nil
         frame = nil
@@ -598,6 +612,7 @@ final class Emulator {
             core.run()
             snapshot = frame
         }
+        readDisk()
         if announce { show("Loaded \(Self.slotTitle(slot))", "arrow.counterclockwise") }
         return true
     }
@@ -615,6 +630,7 @@ final class Emulator {
             core.run()
             snapshot = frame
         }
+        readDisk()
         show("Load undone", "arrow.uturn.backward")
     }
 
@@ -769,6 +785,30 @@ final class Emulator {
     /// Apple's ROMs that AppleWin needs to boot a disk (AppleWin's own file names). The user supplies them.
     static let appleIIeROMs = ["Apple2e_Enhanced.rom", "Apple2e_Enhanced_Video.rom", "DISK2.rom"]
 
+    /// Ejects the disk and puts in `disks[index]`, like swapping floppies by hand.
+    func insertDisk(_ index: Int) {
+        finishBatch()
+        guard core != nil, let control = diskControl, disks.indices.contains(index) else { return }
+        let ok = control.set_eject_state?(true) == true && control.set_image_index?(UInt32(index)) == true
+            && control.set_eject_state?(false) == true
+        readDisk()
+        show(ok ? "Disk \(currentDisk + 1): \(disks[currentDisk].deletingPathExtension().lastPathComponent)" : "Couldn't change the disk",
+             ok ? "opticaldiscdrive.fill" : "exclamationmark.triangle.fill")
+    }
+
+    func nextDisk() {
+        guard !disks.isEmpty else { return }
+        insertDisk((currentDisk + 1) % disks.count)
+    }
+
+    /// Which disk is in the drive (a save state or rewind can put a different one back).
+    private func readDisk() {
+        guard let control = diskControl, !disks.isEmpty else { return }
+        guard let raw = control.get_image_index?() else { return }
+        let index = Int(raw)
+        if index != currentDisk, disks.indices.contains(index) { currentDisk = index }
+    }
+
     /// True while the game reads a real keyboard (the Apple II): every key goes to it instead of the app.
     var hasKeyboard: Bool { keyboard != nil }
 
@@ -852,6 +892,10 @@ final class Emulator {
             data.assumingMemoryBound(to: retro_log_callback.self).pointee.log = host_log_callback()
         case RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK where playingCore == "applewin":
             keyboard = data.assumingMemoryBound(to: retro_keyboard_callback.self).pointee.callback
+        case RETRO_ENVIRONMENT_GET_DISK_CONTROL_INTERFACE_VERSION where playingCore == "applewin":
+            data.assumingMemoryBound(to: UInt32.self).pointee = 1
+        case RETRO_ENVIRONMENT_SET_DISK_CONTROL_EXT_INTERFACE where playingCore == "applewin":
+            diskControl = data.assumingMemoryBound(to: retro_disk_control_ext_callback.self).pointee
         case RETRO_ENVIRONMENT_GET_CAN_DUPE:
             data.assumingMemoryBound(to: Bool.self).pointee = true
         case RETRO_ENVIRONMENT_GET_VARIABLE:

@@ -557,6 +557,10 @@ final class AppModel {
             guard screen == .library else { return false }
             isSearching = true
             return true
+        case "d":
+            guard screen == .game, !emulator.disks.isEmpty else { return false }
+            emulator.nextDisk()
+            return true
         case "=", "+", "-", "0":
             guard screen == .game else { return false }
             zoomGame(chars == "0" ? 0 : chars == "-" ? -1 : 1)

@@ -12,6 +12,8 @@ final class Library {
     let root: URL
     private(set) var roms: [URL] = []
     private(set) var bios: [URL] = []
+    /// Apple II games on several disks, keyed by the first disk (the only one `roms` lists).
+    private(set) var diskSets: [URL: [URL]] = [:]
     /// Keyed by ROM file name.
     private(set) var meta: [String: GameMeta] = [:]
     /// Your own order from dragging games around (file names). Games it doesn't list go after it, A–Z.
@@ -131,10 +133,12 @@ final class Library {
     @discardableResult
     func remove(_ rom: URL) -> URL? {
         var trashed: NSURL?
-        do {
-            try FileManager.default.trashItem(at: rom, resultingItemURL: &trashed)
-        } catch {
-            NSLog("Couldn't move \(rom.path) to the Trash: \(error)")
+        for disk in (diskSets[rom] ?? [rom]).reversed() { // a multi-disk game goes as a whole; `trashed` ends on `rom`
+            do {
+                try FileManager.default.trashItem(at: disk, resultingItemURL: &trashed)
+            } catch {
+                NSLog("Couldn't move \(disk.path) to the Trash: \(error)")
+            }
         }
         reload()
         return trashed as URL?
@@ -155,7 +159,10 @@ final class Library {
 
     func reload() {
         let rank = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
-        roms = files(in: "ROMs").enumerated()
+        let all = files(in: "ROMs")
+        diskSets = DiskSets.group(all)
+        let laterDisks = Set(diskSets.values.flatMap { $0.dropFirst() })
+        roms = all.filter { !laterDisks.contains($0) }.enumerated()
             .sorted { (rank[$0.element.lastPathComponent] ?? .max, $0.offset) < (rank[$1.element.lastPathComponent] ?? .max, $1.offset) }
             .map(\.element)
         bios = files(in: "BIOS")
