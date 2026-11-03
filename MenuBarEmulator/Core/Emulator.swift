@@ -78,6 +78,8 @@ final class Emulator {
     /// A multi-disk Apple II game's disks, and which one is in the drive. Empty for everything else.
     private(set) var disks: [URL] = []
     private(set) var currentDisk = 0
+    /// The controller is plugged in as the Apple II joystick.
+    private(set) var hasJoystick = false
 
     let library: Library
     let controls: Controls
@@ -217,6 +219,7 @@ final class Emulator {
         diskControl = nil
         disks = []
         currentDisk = 0
+        hasJoystick = false
         playingCore = name
         turboHeld = []
         pressed = []
@@ -268,6 +271,11 @@ final class Emulator {
         self.core = core
         game = rom
         if set.count > 1, diskControl?.get_num_images?() == UInt32(set.count) { disks = set }
+        // AppleWin has no joystick until one is plugged into port 0. As a joypad, the d-pad is the stick.
+        if name == "applewin", let plug = core.setControllerPortDevice {
+            plug(0, UInt32(RETRO_DEVICE_JOYPAD))
+            hasJoystick = true
+        }
         cheatsSupported = core.cheatReset != nil && core.cheatSet != nil
         loadSRAM()
         if hasState(Self.autoSlot) { loadState(Self.autoSlot, announce: false) } // pick up exactly where you left off
@@ -303,6 +311,7 @@ final class Emulator {
         keyboard = nil
         diskControl = nil
         disks = []
+        hasJoystick = false
         sync()
         game = nil
         frame = nil
@@ -1354,6 +1363,7 @@ private final class Core {
     let unserialize: @convention(c) (UnsafeRawPointer?, Int) -> Bool
     let cheatReset: (@convention(c) () -> Void)?
     let cheatSet: (@convention(c) (UInt32, Bool, UnsafePointer<CChar>?) -> Void)?
+    let setControllerPortDevice: (@convention(c) (UInt32, UInt32) -> Void)?
 
     init?(url: URL) {
         guard let handle = dlopen(url.path, RTLD_NOW | RTLD_LOCAL) else {
@@ -1390,6 +1400,7 @@ private final class Core {
         (self.serializeSize, self.serialize, self.unserialize) = (serializeSize, serialize, unserialize)
         cheatReset = sym("retro_cheat_reset")
         cheatSet = sym("retro_cheat_set")
+        setControllerPortDevice = sym("retro_set_controller_port_device")
     }
 }
 

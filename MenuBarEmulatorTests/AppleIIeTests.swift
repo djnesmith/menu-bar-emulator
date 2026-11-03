@@ -60,6 +60,17 @@ final class AppleIIeTests: EmulatorTestCase {
         XCTAssertNotNil(emulator.game)
     }
 
+    /// AppleWin only has a joystick once a device is plugged into port 0; before this, the controller did nothing.
+    func testControllerIsTheJoystick() throws {
+        let library = try libraryWithBlankDisks(["Blank.dsk"])
+        let emulator = makeEmulator(library)
+        emulator.play(try XCTUnwrap(library.roms.first))
+        XCTAssertNil(emulator.error)
+        XCTAssertTrue(emulator.hasJoystick)
+        emulator.stop()
+        XCTAssertFalse(emulator.hasJoystick)
+    }
+
     func testMultiDiskGamesAreOneGame() throws {
         func names(_ files: [String]) -> [[String]] {
             DiskSets.group(files.map { URL(filePath: "/x/\($0)") }).values.map { $0.map(\.lastPathComponent) }.sorted { $0[0] < $1[0] }
