@@ -1,6 +1,6 @@
 # Menu Bar Emulator
 
-Game Boy, GBA, DS, NES, SNES, Genesis, Master System, Game Gear and Apple IIe games, living in your Mac's menu bar. Click the icon (or press your shortcut), play, and click away: it pauses and saves itself.
+Game Boy, GBA, DS, 3DS, NES, SNES, Genesis, Master System, Game Gear and Apple IIe games, living in your Mac's menu bar. Click the icon (or press your shortcut), play, and click away: it pauses and saves itself.
 
 **Early build.** Things might break. Feedback and tips: [ko-fi.com/kian](https://ko-fi.com/kian)
 
@@ -15,8 +15,12 @@ Game Boy, GBA, DS, NES, SNES, Genesis, Master System, Game Gear and Apple IIe ga
 - Pauses and saves when hidden; resume where you left off. Save states, rewind, fast-forward, slow motion, turbo.
 - Any game controller, everywhere, including all the menus. Keyboard layouts: Classic, mGBA or WASD.
 - 12 DS screen layouts, the mouse as the stylus, and a separate touch-screen window.
+- 3DS games as an optional one-time download (the Azahar emulator, straight from Azahar's GitHub), drawn on the GPU at twice the 3DS resolution.
 - Cheats and IPS / UPS / BPS mod patches, box art or your own pictures, custom themes.
 - Built-in lo-fi music: an original 30-minute mix made in code. Turn it on, or have it play while you fast-forward.
+- Automatic save backups (every 10 minutes of play, the newest 20) you can restore: right-click a game › Save Backups.
+- Ghost mode: the popped-out window turns see-through and lets clicks through, so you can watch while you work.
+- Drop a game on the menu bar icon to play it, Shuffle for a random game, a CRT filter, play-time milestones.
 
 ## Install
 1. Download the latest zip from [Releases](../../releases) and drag **Menu Bar Emulator** into Applications.
@@ -33,9 +37,9 @@ brew install cmake ninja
 ./build-cores.sh
 open MenuBarEmulator.xcodeproj
 ```
-`build-cores.sh` downloads pinned emulator-core sources into the ignored `cores/` folder, excluding their upstream ROM/save test folders. It builds them into `BuiltCores/`, which Xcode copies into the app. Then press ⌘R.
+`build-cores.sh` downloads pinned emulator-core sources into the ignored `cores/` folder, excluding their upstream ROM/save test folders. It builds them into `BuiltCores/`, which Xcode copies into the app, along with MoltenVK (Khronos's release, checksum-checked) for the 3DS emulator. Then press ⌘R.
 
-Tests run with ⌘U. Tests requiring real ROMs are skipped unless optional development fixtures are supplied in the ignored `LocalTestFixtures/ROMs/` folder or through `MENU_BAR_EMULATOR_TEST_ROMS`. No ROM fixtures are included in this repository or the app.
+Tests run with ⌘U. Tests requiring real ROMs are skipped unless optional development fixtures are supplied in the ignored `LocalTestFixtures/ROMs/` folder or through `MENU_BAR_EMULATOR_TEST_ROMS`. No ROM fixtures are included in this repository or the app. The 3DS test runs with `MENU_BAR_EMULATOR_3DS_ZIP` (Azahar's libretro zip) and `MENU_BAR_EMULATOR_3DS_ROM` (a decrypted game you own).
 
 ## Credits and licenses
 - [mGBA](https://github.com/mgba-emu/mgba) (GB, GBC, GBA): Mozilla Public License 2.0
@@ -45,8 +49,10 @@ Tests run with ⌘U. Tests requiring real ROMs are skipped unless optional devel
 - [clownmdemu](https://github.com/Clownacy/clownmdemu-libretro) (Genesis): GNU AGPL 3.0
 - [Gearsystem](https://github.com/drhelius/Gearsystem) (Master System, Game Gear): GNU GPL 3.0
 - [AppleWin](https://github.com/audetto/AppleWin) (Apple IIe): GNU GPL 2.0
+- [Azahar](https://github.com/azahar-emu/azahar) (3DS, downloaded from Azahar's own release when you set up 3DS games): GNU GPL 2.0 or later
+- [MoltenVK](https://github.com/KhronosGroup/MoltenVK) (Vulkan on Metal, for the 3DS emulator): Apache License 2.0
 - [libretro-common](https://github.com/libretro/libretro-common): MIT. Box art from [libretro-thumbnails](https://github.com/libretro-thumbnails/libretro-thumbnails); it belongs to its owners.
 
 This app is released under the **GNU GPL 3.0** (see `LICENSE`), because it ships with GPL-licensed melonDS.
 
-Game Boy, Game Boy Color, Game Boy Advance, Nintendo DS, NES and Super Nintendo are trademarks of Nintendo; Genesis, Master System and Game Gear are trademarks of Sega; Apple IIe is a trademark of Apple. This project isn't affiliated with or endorsed by Nintendo, Sega or Apple.
+Game Boy, Game Boy Color, Game Boy Advance, Nintendo DS, Nintendo 3DS, NES and Super Nintendo are trademarks of Nintendo; Genesis, Master System and Game Gear are trademarks of Sega; Apple IIe is a trademark of Apple. This project isn't affiliated with or endorsed by Nintendo, Sega or Apple.

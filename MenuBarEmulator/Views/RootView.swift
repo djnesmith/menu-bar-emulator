@@ -84,6 +84,9 @@ struct RootView: View {
                 case .themeEditor(let id): ThemeEditor(model: model, editingID: id)
                 case .folderName(let rom, let folder): FolderNameSheet(model: model, rom: rom, folder: folder)
                 case .supporter: SupporterSheet(model: model)
+                case .saveBackups(let rom): SaveBackupsSheet(model: model, rom: rom)
+                case .whatsNew: WhatsNewSheet(model: model)
+                case .threeDS(let rom): ThreeDSSheet(model: model, rom: rom)
                 }
             }
             .transition(.scale(scale: 0.94).combined(with: .opacity))

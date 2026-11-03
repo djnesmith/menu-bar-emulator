@@ -1,7 +1,7 @@
 {
-  "version": "1.0.5",
-  "message": "one-click updates: after this one, new versions install right from here",
+  "version": "1.2.1",
+  "message": "fixes the 3ds bottom screen stretching after you resize the window",
   "url": "https://ko-fi.com/kian",
-  "download": "https://github.com/Kiasora/menu-bar-emulator/releases/download/v1.0.5/Menu-Bar-Emulator-1.0.5-macOS.zip",
-  "sha256": "24fd24cd960f56b63ea75fb41f5e1f703d0076c47991d141cee69899f7340444"
+  "download": "https://github.com/Kiasora/menu-bar-emulator/releases/download/v1.2.1/Menu-Bar-Emulator-1.2.1-macOS.zip",
+  "sha256": "1856e68b1b4b5dc0c51296393f0e160cea8dd2a13c8c67fbe60fa1fa95c75a07"
 }

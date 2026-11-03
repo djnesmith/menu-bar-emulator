@@ -16,6 +16,14 @@ class EmulatorTestCase: XCTestCase {
         try? FileManager.default.removeItem(at: temp)
     }
 
+    /// Waits (up to `timeout`) for something that settles on a later turn of the main queue. Fixed short waits flaked
+    /// when the Mac was busy.
+    func eventually(_ timeout: TimeInterval = 2, _ condition: () -> Bool) -> Bool {
+        let end = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+        return condition()
+    }
+
     func defaults() -> UserDefaults {
         UserDefaults(suiteName: "MenuBarEmulatorTests.\(UUID().uuidString)")!
     }
@@ -1075,12 +1083,10 @@ final class LofiTests: EmulatorTestCase {
         XCTAssertEqual(model.lofiVolume, 0, "music off at normal speed")
         emulator.fastForward = true
         XCTAssertGreaterThan(model.lofiVolume, 0, "sped up")
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-        XCTAssertGreaterThan(model.lofi.volume, 0, "the player follows along")
+        XCTAssertTrue(eventually { model.lofi.volume > 0 }, "the player follows along")
         model.toggleLofiSpedUp()
         XCTAssertEqual(model.lofiVolume, 0, "the ⏩ switch turns that off")
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-        XCTAssertEqual(model.lofi.volume, 0, "and it fades out")
+        XCTAssertTrue(eventually { model.lofi.volume == 0 }, "and it fades out")
         emulator.fastForward = false
         emulator.soundOn = false
         model.prefs.lofiOn = true
@@ -1089,8 +1095,7 @@ final class LofiTests: EmulatorTestCase {
         XCTAssertGreaterThan(model.lofiVolume, 0, "music on plays in games too")
         model.toggleSilentGames()
         XCTAssertEqual(model.lofiVolume, 0, "No sound in games silences the lo-fi while a game's up")
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        XCTAssertTrue(emulator.silenced, "and the game's own sound")
+        XCTAssertTrue(eventually { emulator.silenced }, "and the game's own sound")
         model.windowOnScreen = true
         model.screen = .library
         emulator.showingGame = false
@@ -1742,5 +1747,441 @@ final class AppUpdaterTests: EmulatorTestCase {
         try AppUpdater.swap(staged, into: installed)
         XCTAssertEqual(version(installed), "1.0.4")
         XCTAssertEqual(shell("/usr/bin/codesign", ["--verify", "--deep", "--strict", installed.path]), 0)
+    }
+}
+
+final class NextFixTests: EmulatorTestCase {
+    private func spin(_ seconds: Double = 0.15) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
+
+    /// Closing the lid, locking the screen or switching users pauses and saves, like hiding the window.
+    func testSleepAndLockPauseAndSaveTheGame() throws {
+        let emulator = makeEmulator()
+        emulator.windowVisible = true
+        emulator.showingGame = true
+        emulator.play(try testROM(Self.gba))
+        XCTAssertTrue(emulator.isRunning)
+        let center = NSWorkspace.shared.notificationCenter
+        center.post(name: NSWorkspace.willSleepNotification, object: nil)
+        spin()
+        XCTAssertFalse(emulator.isRunning, "sleep pauses")
+        XCTAssertTrue(emulator.hasState(Emulator.autoSlot), "and saves where you were")
+        center.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        center.post(name: NSWorkspace.didWakeNotification, object: nil)
+        spin()
+        XCTAssertFalse(emulator.isRunning, "awake, but the screens are still off")
+        center.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        spin()
+        XCTAssertTrue(emulator.isRunning, "everything's back")
+        emulator.stop()
+    }
+
+    func testSoundComesBackAfterTheOutputDeviceChanges() {
+        let player = AudioPlayer()
+        player.start(sampleRate: 32768)
+        XCTAssertTrue(player.isOutputRunning)
+        player.simulateDeviceChange()
+        spin()
+        XCTAssertTrue(player.isOutputRunning, "restarted on the new device")
+        player.stop()
+        player.simulateDeviceChange()
+        spin()
+        XCTAssertFalse(player.isOutputRunning, "but not after the game stopped it")
+    }
+
+    func testGenesisBinImportsAsAGame() throws {
+        let library = Library(root: temp.appending(path: "Library"))
+        var rom = [UInt8](repeating: 0, count: 0x400)
+        rom.replaceSubrange(0x100..<0x110, with: Array("SEGA GENESIS    ".utf8))
+        let bin = temp.appending(path: "Sonic.bin")
+        try Data(rom).write(to: bin)
+        library.importFiles([bin, try makeFile("bios7.bin")])
+        XCTAssertEqual(library.roms.map(\.lastPathComponent), ["Sonic.md"])
+        XCTAssertEqual(library.bios.map(\.lastPathComponent), ["bios7.bin"], "real BIOS files stay BIOS")
+        XCTAssertEqual(library.roms.first.flatMap(GameSystem.init(rom:)), .md)
+    }
+
+    func testScreenshotWithNothingOnScreenSaysSo() {
+        let emulator = makeEmulator()
+        var toasts: [String] = []
+        emulator.onToast = { text, _ in toasts.append(text) }
+        XCTAssertNil(emulator.screenshot())
+        XCTAssertEqual(toasts, ["Nothing to capture yet"])
+    }
+}
+
+final class NextFeatureTests: EmulatorTestCase {
+    private func spin(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
+
+    /// A tiny NES game that just loops: enough to load, run and save.
+    private func tinyGame(_ name: String) throws -> URL {
+        var prg = [UInt8](repeating: 0xEA, count: 0x4000)
+        prg.replaceSubrange(0..<3, with: [0x4C, 0x00, 0xC0]) // JMP $C000
+        prg.replaceSubrange(0x3FFA..<0x4000, with: [0x00, 0xC0, 0x00, 0xC0, 0x00, 0xC0])
+        let header: [UInt8] = [0x4E, 0x45, 0x53, 0x1A, 1, 1] + [UInt8](repeating: 0, count: 10)
+        let url = temp.appending(path: name)
+        try Data(header + prg + [UInt8](repeating: 0, count: 0x2000)).write(to: url)
+        return url
+    }
+
+    private func modelWithGames(_ names: [String]) throws -> AppModel {
+        let library = Library(root: temp.appending(path: "Library"))
+        library.importFiles(try names.map { try tinyGame($0) })
+        let model = makeModel(library: library)
+        model.emulator.windowVisible = true
+        model.emulator.showingGame = true
+        return model
+    }
+
+
+    func testShufflePlaysADifferentGame() throws {
+        let model = try modelWithGames(["One.nes", "Two.nes"])
+        let one = try XCTUnwrap(model.library.roms.first { $0.lastPathComponent == "One.nes" })
+        model.play(one)
+        model.playRandom()
+        XCTAssertEqual(model.emulator.game?.lastPathComponent, "Two.nes", "never the one you're in when there's another")
+        let two = try XCTUnwrap(model.library.roms.first { $0.lastPathComponent == "Two.nes" })
+        model.library.put(one, in: "Folder")
+        model.screen = .library
+        model.playRandom()
+        XCTAssertEqual(model.emulator.game, one, "games in folders count on the main list")
+        _ = two
+        model.emulator.stop()
+    }
+
+
+    func testSaveBackupsKeepTheNewestAndRestoreUndoably() throws {
+        let emulator = makeEmulator()
+        let rom = temp.appending(path: "Game.gba")
+        Emulator.backupInterval = 0
+        defer { Emulator.backupInterval = 10 * 60 }
+        for i in 0..<25 {
+            emulator.backUpSave(Data([UInt8(i)]), for: rom)
+            Thread.sleep(forTimeInterval: 0.003)
+        }
+        var backups = emulator.saveBackups(for: rom)
+        XCTAssertEqual(backups.count, Emulator.backupsKept, "only the newest 20 are kept")
+        XCTAssertEqual(try Data(contentsOf: backups[0].url), Data([24]))
+        Emulator.backupInterval = 600
+        emulator.backUpSave(Data([99]), for: rom)
+        XCTAssertEqual(try Data(contentsOf: emulator.saveBackups(for: rom)[0].url), Data([24]), "at most one every 10 minutes")
+
+        try FileManager.default.createDirectory(at: emulator.saveFile(for: rom).deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([77]).write(to: emulator.saveFile(for: rom))
+        let oldest = try XCTUnwrap(backups.last)
+        try emulator.restoreBackup(oldest.url, for: rom)
+        XCTAssertEqual(try Data(contentsOf: emulator.saveFile(for: rom)), Data([5]))
+        backups = emulator.saveBackups(for: rom)
+        XCTAssertEqual(try Data(contentsOf: backups[0].url), Data([77]), "the save it replaced was backed up first")
+    }
+
+
+    func testCRTFilterSticks() {
+        let store = defaults()
+        Display(store: store).filter = .crt
+        XCTAssertEqual(Display(store: store).filter, .crt)
+        XCTAssertEqual(Display.Filter.crt.title, "CRT")
+    }
+
+
+    @MainActor
+    func testGhostModeLetsClicksThroughUntilTheShortcut() {
+        let model = makeModel()
+        let window = FloatingWindow(model: model, store: defaults())
+        window.setGhost(true)
+        spin(0.4)
+        XCTAssertTrue(window.panelWindow.isVisible)
+        XCTAssertTrue(window.panelWindow.ignoresMouseEvents)
+        XCTAssertEqual(window.panelWindow.alphaValue, 0.5, accuracy: 0.05)
+        XCTAssertTrue(model.isGhost)
+        window.toggle(.floating) // the pop-out shortcut
+        spin(0.4)
+        XCTAssertFalse(window.panelWindow.ignoresMouseEvents)
+        XCTAssertFalse(model.isGhost)
+        XCTAssertTrue(window.panelWindow.isVisible, "it comes back instead of hiding")
+        XCTAssertEqual(window.panelWindow.alphaValue, 1, accuracy: 0.05)
+        window.hide()
+    }
+}
+
+final class NextExtrasTests: EmulatorTestCase {
+    func testMilestonesAtWholeHours() {
+        XCTAssertEqual(Emulator.milestone(from: 3500, to: 3700), 1)
+        XCTAssertNil(Emulator.milestone(from: 3700, to: 7000), "1 hour was already celebrated")
+        XCTAssertEqual(Emulator.milestone(from: 17900, to: 18100), 5)
+        XCTAssertEqual(Emulator.milestone(from: 0, to: 40000), 10, "a huge jump says the biggest one passed")
+    }
+
+    func testWhatsNewShowsOnceAfterUpdatingButNotOnAFreshInstall() {
+        let realLastVersion = UserDefaults.standard.string(forKey: "MenuBarEmulator.lastVersion") // set once you've used the app
+        let store = defaults()
+        store.set(true, forKey: "MenuBarEmulator.onboarded")
+        store.set("1.0.5", forKey: "MenuBarEmulator.lastVersion")
+        let updated = makeModel(store: store)
+        updated.showWhatsNewIfUpdated()
+        XCTAssertEqual(updated.sheet, .whatsNew)
+        let again = makeModel(store: store)
+        again.showWhatsNewIfUpdated()
+        XCTAssertNil(again.sheet, "only once")
+
+        let fresh = makeModel(store: defaults()) // not onboarded: the tour shows instead
+        fresh.showWhatsNewIfUpdated()
+        XCTAssertNil(fresh.sheet)
+        XCTAssertTrue(AppInfo.isTestHost, "so the app hosting these tests leaves What's New alone")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "MenuBarEmulator.lastVersion"), realLastVersion, "and never touches it in the real settings")
+    }
+
+    @MainActor
+    func testDroppingOneGameOnTheIconStartsIt() throws {
+        var prg = [UInt8](repeating: 0xEA, count: 0x4000)
+        prg.replaceSubrange(0..<3, with: [0x4C, 0x00, 0xC0])
+        prg.replaceSubrange(0x3FFA..<0x4000, with: [0x00, 0xC0, 0x00, 0xC0, 0x00, 0xC0])
+        let rom = temp.appending(path: "Dropped.nes")
+        try Data([0x4E, 0x45, 0x53, 0x1A, 1, 1] + [UInt8](repeating: 0, count: 10) + prg + [UInt8](repeating: 0, count: 0x2000)).write(to: rom)
+        let model = makeModel()
+        let window = FloatingWindow(model: model, store: defaults())
+        window.droppedOnIcon([rom])
+        XCTAssertEqual(model.emulator.game?.lastPathComponent, "Dropped.nes")
+        XCTAssertEqual(model.screen, .game)
+        model.emulator.stop()
+        window.droppedOnIcon([rom]) // already in the library: still starts it
+        XCTAssertEqual(model.emulator.game?.lastPathComponent, "Dropped.nes")
+        model.emulator.stop()
+        window.hide()
+    }
+}
+
+// MARK: - 3DS
+
+final class ThreeDSTests: EmulatorTestCase {
+    func testThreeDSFilesPickTheirSystem() {
+        for name in ["a.3ds", "a.CCI", "a.cxi", "a.3dsx"] { XCTAssertEqual(GameSystem(rom: URL(filePath: "/x/\(name)")), .n3ds, name) }
+        XCTAssertEqual(GameSystem.n3ds.core, "azahar")
+        XCTAssertTrue(Library.romExtensions.isSuperset(of: ["3ds", "cci", "cxi", "3dsx"]))
+    }
+
+    func testTouchScreenSkipsTheBarsBesideIt() {
+        // The 3DS touch screen is the middle 80% of the bottom half: 320 of the frame's 400 pixels.
+        let size = CGSize(width: 320, height: 240)
+        let topLeft = ScreenView.normalizedTouch(.zero, in: size, crop: .narrowBottom)
+        let bottomRight = ScreenView.normalizedTouch(CGPoint(x: 320, y: 240), in: size, crop: .narrowBottom)
+        XCTAssertEqual(topLeft.x, 0.1, accuracy: 1e-9)
+        XCTAssertEqual(topLeft.y, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(bottomRight.x, 0.9, accuracy: 1e-9)
+        XCTAssertEqual(bottomRight.y, 1, accuracy: 1e-9)
+    }
+
+    func testDamagedDownloadIsNotInstalled() throws {
+        let zip = try makeFile("azahar.zip", "not the real thing")
+        let target = temp.appending(path: "Cores/azahar.libretro")
+        XCTAssertThrowsError(try ThreeDSSupport.install(zip: zip, sha256: ThreeDSSupport.sha256, to: target))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.path))
+    }
+
+    func testA3DSGameAsksForTheDownloadFirst() throws {
+        let model = makeModel()
+        let rom = try makeFile("Game.3ds")
+        model.play(rom)
+        XCTAssertEqual(model.sheet, .threeDS(rom))
+        XCTAssertNil(model.emulator.game)
+    }
+
+    /// A 3DS game file with just a header: NCSD (cartridge, ID at 0x108) or NCCH (program, ID at 0x118).
+    private func threeDSGame(_ name: String, id: UInt64, cartridge: Bool = true) throws -> URL {
+        var header = [UInt8](repeating: 0, count: 0x400)
+        header.replaceSubrange(0x100..<0x104, with: Array((cartridge ? "NCSD" : "NCCH").utf8))
+        let at = cartridge ? 0x108 : 0x118
+        for i in 0..<8 { header[at + i] = UInt8(truncatingIfNeeded: id >> (8 * UInt64(i))) }
+        let url = temp.appending(path: name)
+        try Data(header).write(to: url)
+        return url
+    }
+
+    func testFindsTheSaveFolderFromTheTitleID() throws {
+        let emulator = makeEmulator()
+        let cartridge = try threeDSGame("Ultra Sun.3ds", id: 0x0004_0000_001B_5000)
+        XCTAssertEqual(Emulator.threeDSTitleID(cartridge), 0x0004_0000_001B_5000)
+        XCTAssertEqual(Emulator.threeDSTitleID(try threeDSGame("Program.cxi", id: 0x0004_0000_0012_3400, cartridge: false)), 0x0004_0000_0012_3400)
+        XCTAssertNil(Emulator.threeDSTitleID(try makeFile("Homebrew.3dsx")))
+        let folder = try XCTUnwrap(emulator.threeDSSaveFolder(for: cartridge))
+        XCTAssertTrue(folder.path.hasSuffix("Saves/Azahar/sdmc/Nintendo 3DS/\(String(repeating: "0", count: 32))/\(String(repeating: "0", count: 32))/title/00040000/001b5000/data"), folder.path)
+    }
+
+    func testThreeDSSavesAreBackedUpRestoredAndExported() throws {
+        let saved = Emulator.backupInterval
+        defer { Emulator.backupInterval = saved }
+        let emulator = makeEmulator()
+        let rom = try threeDSGame("Ultra Sun.3ds", id: 0x0004_0000_001B_5000)
+        let folder = try XCTUnwrap(emulator.threeDSSaveFolder(for: rom))
+        let main = folder.appending(path: "00000001/main")
+        try FileManager.default.createDirectory(at: main.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("first save".utf8).write(to: main)
+
+        emulator.backUpThreeDSSave(for: rom)
+        XCTAssertEqual(emulator.saveBackups(for: rom).map { $0.url.pathExtension }, ["zip"])
+        emulator.backUpThreeDSSave(for: rom)
+        XCTAssertEqual(emulator.saveBackups(for: rom).count, 1, "nothing changed, so no new backup")
+        Emulator.backupInterval = 0
+        try Data("second save".utf8).write(to: main)
+        emulator.backUpThreeDSSave(for: rom)
+        XCTAssertEqual(emulator.saveBackups(for: rom).count, 2)
+
+        try emulator.restoreBackup(XCTUnwrap(emulator.saveBackups(for: rom).last).url, for: rom)
+        XCTAssertEqual(try String(contentsOf: main, encoding: .utf8), "first save")
+        XCTAssertEqual(emulator.saveBackups(for: rom).count, 3, "the save it replaced was backed up first")
+
+        let exported = temp.appending(path: "Ultra Sun save.zip")
+        try emulator.exportSave(for: rom, to: exported)
+        try Data("lost".utf8).write(to: main)
+        try emulator.importSave(from: exported, for: rom)
+        XCTAssertEqual(try String(contentsOf: main, encoding: .utf8), "first save")
+    }
+
+    func testContinuePicturesShowTheTopScreenOfDSAnd3DSGames() throws {
+        let library = Library(root: temp.appending(path: "Library"))
+        let emulator = makeEmulator(library)
+        let states = library.root.appending(path: "States")
+        try FileManager.default.createDirectory(at: states, withIntermediateDirectories: true)
+        let picture = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 6, bitsPerSample: 8, samplesPerPixel: 4,
+                                       hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        let png = try XCTUnwrap(picture.representation(using: .png, properties: [:]))
+        for name in ["Game.nds", "Game.3ds", "Game.gba"] { try png.write(to: states.appending(path: "\(name).auto.png")) }
+        func height(_ name: String) throws -> Int {
+            try XCTUnwrap(emulator.continuePicture(for: temp.appending(path: name))?.cgImage(forProposedRect: nil, context: nil, hints: nil)).height
+        }
+        XCTAssertEqual(try height("Game.nds"), 3)
+        XCTAssertEqual(try height("Game.3ds"), 3)
+        XCTAssertEqual(try height("Game.gba"), 6)
+    }
+
+    /// The picture can never be left at another size than its view (it spilled past the 3DS screens after a resize).
+    func testScreenPictureAlwaysMatchesItsView() throws {
+        let info = CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.noneSkipFirst.rawValue)
+        let image = try XCTUnwrap(CGImage(width: 4, height: 4, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 16,
+                                          space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: info,
+                                          provider: CGDataProvider(data: Data(count: 64) as CFData)!, decode: nil,
+                                          shouldInterpolate: false, intent: .defaultIntent))
+        let view = ScreenView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        view.show(image)
+        XCTAssertEqual(view.picture.frame, view.bounds)
+        // The view's layer changing size by itself (without setFrameSize or layout) still carries the picture along.
+        view.layer?.bounds = CGRect(x: 0, y: 0, width: 200, height: 120)
+        XCTAssertEqual(view.picture.frame.size, CGSize(width: 200, height: 120))
+        // And if the picture ever ends up out of step anyway, the next frame puts it back.
+        view.picture.frame = CGRect(x: 0, y: 0, width: 500, height: 500)
+        view.show(image)
+        XCTAssertEqual(view.picture.frame, view.bounds)
+    }
+
+    /// The top screen fills the width and the touch screen sits centered under it, with black beside it, at every window
+    /// size (Kian saw the bottom screen stretched off to the right). Needs the 3DS fixtures.
+    @MainActor
+    func testThreeDSScreensFitTheWindow() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let zip = env["MENU_BAR_EMULATOR_3DS_ZIP"], let rom = env["MENU_BAR_EMULATOR_3DS_ROM"] else { throw XCTSkip("3DS fixtures") }
+        let library = Library(root: temp.appending(path: "Library"))
+        try ThreeDSSupport.install(zip: URL(filePath: zip), sha256: ThreeDSSupport.sha256, to: ThreeDSSupport(folder: library.coresFolder).coreFile)
+        let model = makeModel(library: library)
+        model.emulator.windowVisible = true
+        model.emulator.showingGame = true
+        model.play(URL(filePath: rom))
+        XCTAssertEqual(model.currentSystem, .n3ds)
+        let host = NSHostingView(rootView: GameSurface(model: model))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); model.emulator.stop() }
+        RunLoop.main.run(until: Date().addingTimeInterval(3))
+
+        // Animated, like the real window: growing and shrinking between sizes, ending small (the library is bigger).
+        for (size, animated) in [(NSSize(width: 500, height: 600), false), (NSSize(width: 368, height: 441.6), true),
+                                 (NSSize(width: 640, height: 768), true), (NSSize(width: 368, height: 441.6), true)] {
+            window.setFrame(window.frameRect(forContentRect: NSRect(origin: window.frame.origin, size: size)), display: true, animate: animated)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+            let width = Int(size.width), height = Int(size.height)
+            var pixels = [UInt8](repeating: 0, count: width * height * 4)
+            let context = try XCTUnwrap(CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            let layer = try XCTUnwrap(host.layer)
+            layer.render(in: context)
+            // Row 0 of the bitmap is the bottom of the window (Core Graphics counts up).
+            func brightness(_ x: Double, fromTop y: Double) -> Int {
+                let px = Int(x * Double(width)), row = height - 1 - Int(y * Double(height)), i = (row * width + px) * 4
+                return Int(pixels[i]) + Int(pixels[i + 1]) + Int(pixels[i + 2])
+            }
+            XCTAssertGreaterThan(brightness(0.05, fromTop: 0.25), 60, "top screen fills the width at \(size)")
+            XCTAssertGreaterThan(brightness(0.95, fromTop: 0.25), 60, "top screen fills the width at \(size)")
+            XCTAssertGreaterThan(brightness(0.5, fromTop: 0.75), 30, "touch screen in the middle at \(size)")
+            for (x, y) in [(0.04, 0.55), (0.04, 0.9), (0.96, 0.55), (0.96, 0.9)] {
+                XCTAssertLessThan(brightness(x, fromTop: y), 30, "black beside the touch screen at (\(x), \(y)), \(size)")
+            }
+        }
+    }
+
+    /// The real download from Azahar's GitHub release, checksum and all. Needs the network, so it's opt-in.
+    func testDownloadsTheRealEmulatorFromAzahar() throws {
+        guard ProcessInfo.processInfo.environment["MENU_BAR_EMULATOR_NETWORK_TESTS"] != nil else { throw XCTSkip("network test") }
+        let support = ThreeDSSupport(folder: temp.appending(path: "Cores"))
+        var installed = false
+        support.install { installed = true }
+        XCTAssertTrue(eventually(120) { installed })
+        XCTAssertEqual(support.state, .installed)
+        XCTAssertNotNil(dlopen(support.coreFile.path, RTLD_NOW | RTLD_LOCAL), "loads like the bundled cores")
+    }
+
+    /// Installs from a local copy of Azahar's release zip (MENU_BAR_EMULATOR_3DS_ZIP), then runs a real decrypted 3DS
+    /// game (MENU_BAR_EMULATOR_3DS_ROM) on the GPU and checks it keeps full speed.
+    func testInstallsAndRunsA3DSGameAtFullSpeed() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let zip = env["MENU_BAR_EMULATOR_3DS_ZIP"] else { throw XCTSkip("Set MENU_BAR_EMULATOR_3DS_ZIP to Azahar's libretro zip") }
+        let library = Library(root: temp.appending(path: "Library"))
+        let support = ThreeDSSupport(folder: library.coresFolder)
+        var installed = false
+        support.install(from: URL(filePath: zip)) { installed = true }
+        XCTAssertTrue(eventually(30) { installed })
+        XCTAssertEqual(support.state, .installed)
+        guard let rom = env["MENU_BAR_EMULATOR_3DS_ROM"] else { throw XCTSkip("Set MENU_BAR_EMULATOR_3DS_ROM to a decrypted 3DS game") }
+
+        let emulator = makeEmulator(library)
+        var pictures = 0, sawPicture = false
+        let observer = emulator.addFrameObserver { image in
+            pictures += 1
+            // A sample of the bytes: hashing all 3 MB every time held up the main thread and cost frames.
+            if pictures % 30 == 0, let bytes = image.dataProvider?.data as Data?,
+               Set(stride(from: 0, to: bytes.count, by: 997).map { bytes[$0] }).count > 2 { sawPicture = true }
+        }
+        defer { emulator.removeFrameObserver(observer) }
+        emulator.windowVisible = true
+        emulator.showingGame = true
+        emulator.play(URL(filePath: rom))
+        XCTAssertNil(emulator.error)
+        XCTAssertTrue(emulator.isRunning)
+        RunLoop.main.run(until: Date().addingTimeInterval(2))
+        let before = emulator.shownFrames
+        RunLoop.main.run(until: Date().addingTimeInterval(5))
+        let perSecond = Double(emulator.shownFrames - before) / 5
+        // About 60 on a quiet Mac; first-time shader compiles and the rest of the suite can cost some. Software drawing gets ~15.
+        XCTAssertGreaterThan(perSecond, 40, "keeps up with the 3DS's 60 frames a second")
+        XCTAssertTrue(sawPicture, "draws real pictures, not one flat color")
+        let frame = try XCTUnwrap(emulator.frame)
+        XCTAssertEqual(frame.width, 800, "twice the 3DS resolution")
+        XCTAssertEqual(frame.height, 960)
+        XCTAssertEqual(emulator.audioRate, 32728, accuracy: 1)
+        let saveFolder = try XCTUnwrap(emulator.threeDSSaveFolder(for: URL(filePath: rom)))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: saveFolder.deletingLastPathComponent().path),
+                      "the game's save folder is where Azahar keeps it, so backups find it: \(saveFolder.path)")
+
+        var started = CACurrentMediaTime()
+        XCTAssertTrue(emulator.saveState("1", announce: false))
+        let saving = CACurrentMediaTime() - started
+        started = CACurrentMediaTime()
+        XCTAssertTrue(emulator.loadState("1", announce: false))
+        let loading = CACurrentMediaTime() - started
+        XCTContext.runActivity(named: "3DS: \(perSecond) frames/s, save state \(Int(saving * 1000)) ms, load \(Int(loading * 1000)) ms") { _ in }
+        XCTAssertLessThan(saving, 1, "a save state happens every time the window hides")
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertTrue(emulator.isRunning, "still running after loading a state")
+        emulator.stop()
+        XCTAssertNil(emulator.game)
     }
 }

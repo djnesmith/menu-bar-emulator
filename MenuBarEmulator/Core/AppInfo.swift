@@ -12,6 +12,9 @@ enum AppInfo {
     /// The tip jar.
     static let tipURL = "https://ko-fi.com/kian"
 
+    /// Launched by the test runner to host the tests: it shares the real settings, so it mustn't act like a real launch.
+    static var isTestHost: Bool { ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil }
+
     static var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
     }
@@ -48,6 +51,10 @@ enum AppInfo {
                license: "GNU GPL 3.0", url: "https://github.com/drhelius/Gearsystem"),
         Credit(name: "AppleWin", detail: "Apple IIe emulation, by Michael O'Brien, Oliver Schmidt, Tom Charlesworth and contributors; libretro version by Andrea Odetti",
                license: "GNU GPL 2.0", url: "https://github.com/audetto/AppleWin"),
+        Credit(name: "Azahar", detail: "Nintendo 3DS emulation, based on Citra. Downloaded from Azahar's GitHub when you set up 3DS games",
+               license: "GNU GPL 2.0 or later", url: "https://github.com/azahar-emu/azahar"),
+        Credit(name: "MoltenVK", detail: "Vulkan graphics on Metal, for the 3DS emulator, by the Khronos Group",
+               license: "Apache License 2.0", url: "https://github.com/KhronosGroup/MoltenVK"),
         Credit(name: "libretro", detail: "The emulator interface (libretro.h, libretro-common)",
                license: "MIT", url: "https://github.com/libretro/libretro-common"),
         Credit(name: "libretro-thumbnails", detail: "Box art, downloaded when you add a game",

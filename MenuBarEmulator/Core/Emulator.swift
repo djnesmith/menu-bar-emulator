@@ -25,6 +25,9 @@ final class Emulator {
     var windowVisible = false { didSet { sync() } }
     var showingGame = false { didSet { sync() } }
     var userPaused = false { didSet { sync() } }
+    /// False while the Mac sleeps, its screens are off or locked, or another user is switched in. Pausing then saves
+    /// the game and stops the play-time clock (it used to keep counting through a whole night with the lid shut).
+    var systemAwake = true { didSet { sync() } }
 
     /// Fast-forward from the key (toggles) or a controller's right trigger (hold). Sound mutes while it's on.
     var fastForward = false
@@ -143,12 +146,19 @@ final class Emulator {
     @ObservationIgnored private var fpsSince: CFTimeInterval = 0
     @ObservationIgnored private var lastSRAMSave: CFTimeInterval = 0
     @ObservationIgnored private var lastSRAM: Data?
+    /// When the 3DS game's save files last changed, as of its last backup.
+    @ObservationIgnored private var lastThreeDSChange: Date?
     @ObservationIgnored private var undoState: Data?
     @ObservationIgnored private var cStrings: [String: UnsafeMutablePointer<CChar>] = [:]
+    /// The game draws on the GPU (3DS, through VulkanBridge) instead of handing over pixels.
+    @ObservationIgnored private var usesGPU = false
+    /// 3DS games walk with the Circle Pad (Pokémon ignores the D-pad), so the arrows and D-pad drive it instead.
+    @ObservationIgnored private var arrowsAreCirclePad = false
 
     /// Frames between rewind snapshots, and how fast rewind plays back.
     static let rewindInterval = 6
     static let rewindSpeed = 2.0
+    static let dpad = Set([RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_RIGHT].map(UInt32.init))
 
     init(library: Library, controls: Controls) {
         self.library = library
@@ -157,6 +167,30 @@ final class Emulator {
         for dir in [bios, saves] { try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
         biosDir = strdup(bios.path)
         saveDir = strdup(saves.path)
+        watchSystem()
+    }
+
+    @ObservationIgnored private var asleep = Set<String>()
+
+    /// Sleep, display sleep, screen lock and fast user switching each count as "away" until they end.
+    private func watchSystem() {
+        let workspace = NSWorkspace.shared.notificationCenter
+        let pairs: [(away: Notification.Name, back: Notification.Name, center: NotificationCenter)] = [
+            (NSWorkspace.willSleepNotification, NSWorkspace.didWakeNotification, workspace),
+            (NSWorkspace.screensDidSleepNotification, NSWorkspace.screensDidWakeNotification, workspace),
+            (NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.sessionDidBecomeActiveNotification, workspace),
+            (Notification.Name("com.apple.screenIsLocked"), Notification.Name("com.apple.screenIsUnlocked"), DistributedNotificationCenter.default()),
+        ]
+        for pair in pairs {
+            let reason = pair.away.rawValue
+            pair.center.addObserver(forName: pair.away, object: nil, queue: .main) { [weak self] _ in self?.setAway(reason, true) }
+            pair.center.addObserver(forName: pair.back, object: nil, queue: .main) { [weak self] _ in self?.setAway(reason, false) }
+        }
+    }
+
+    private func setAway(_ reason: String, _ away: Bool) {
+        if away { asleep.insert(reason) } else { asleep.remove(reason) }
+        if systemAwake != asleep.isEmpty { systemAwake = asleep.isEmpty }
     }
 
     // MARK: Playing
@@ -164,7 +198,8 @@ final class Emulator {
     func play(_ rom: URL) {
         stop()
         error = nil
-        let name = GameSystem(rom: rom)?.core ?? "mgba"
+        let system = GameSystem(rom: rom)
+        let name = system?.core ?? "mgba"
         if name == "applewin" {
             let missing = Self.appleIIeROMs.filter { !FileManager.default.fileExists(atPath: library.root.appending(path: "BIOS/\($0)").path) }
             guard missing.isEmpty else {
@@ -190,6 +225,9 @@ final class Emulator {
         undoState = nil
         canUndoLoad = false
         optionsChanged = false
+        // Without MoltenVK the 3DS falls back to drawing in software: it works, but 3D scenes run at a fraction of full speed.
+        usesGPU = system == .n3ds && Bundle.main.url(forResource: "MoltenVK", withExtension: "vulkan").map { vkbridge_load($0.path) } == true
+        arrowsAreCirclePad = system == .n3ds
         core.setEnvironment(environmentCallback) // must come before retro_init
         core.setVideoRefresh(videoCallback)
         core.setAudioSample(audioSampleCallback)
@@ -212,7 +250,14 @@ final class Emulator {
             // pointer, so after a failed load it frees the last game's buffer again and crashes. Its retro_init
             // allocates nothing, so skipping the deinit is safe; the next play calls retro_init again.
             if name != "mgba" { core.deinitialize() }
+            vkbridge_close()
             return fail("The emulator couldn't start \(rom.gameTitle).")
+        }
+        // A GPU core loads its game once it has a device.
+        if vkbridge_requested() && !vkbridge_start() {
+            core.unloadGame()
+            core.deinitialize()
+            return fail("Couldn't start the 3DS graphics.")
         }
 
         var av = retro_system_av_info()
@@ -233,6 +278,7 @@ final class Emulator {
         holdingFastForward = false
         slowMotion = false
         lastSRAM = nil
+        lastThreeDSChange = nil
         userPaused = false
         sync()
     }
@@ -248,7 +294,9 @@ final class Emulator {
         saveState(Self.autoSlot, announce: false)
         recordPlaytime()
         if let core {
+            vkbridge_end_drawing() // the GPU device outlives the game: the core frees its GPU objects while unloading
             core.unloadGame()
+            vkbridge_close()
             core.deinitialize()
         }
         core = nil
@@ -267,7 +315,7 @@ final class Emulator {
 
     /// Starts or stops the frame timer to match `windowVisible`, `showingGame` and `userPaused`. Every stop saves.
     private func sync() {
-        let shouldRun = core != nil && windowVisible && showingGame && !userPaused
+        let shouldRun = core != nil && windowVisible && showingGame && !userPaused && systemAwake
         guard shouldRun != isRunning else { return }
         isRunning = shouldRun
         if shouldRun {
@@ -444,8 +492,19 @@ final class Emulator {
 
     private func recordPlaytime() {
         guard let start = runningSince, let game else { return }
+        let before = library.meta(for: game).playtime
         library.addPlaytime(CACurrentMediaTime() - start, to: game)
         runningSince = nil
+        if let hours = Self.milestone(from: before, to: library.meta(for: game).playtime) {
+            show("\(hours) hour\(hours == 1 ? "" : "s") in \(game.gameTitle)", "trophy.fill")
+        }
+    }
+
+    static let milestoneHours = [1, 5, 10, 25, 50, 100]
+
+    /// The play-time milestone (in hours) crossed between two totals, if any.
+    static func milestone(from before: TimeInterval, to after: TimeInterval) -> Int? {
+        milestoneHours.last { before < Double($0) * 3600 && after >= Double($0) * 3600 }
     }
 
     private func fail(_ message: String) {
@@ -455,7 +514,10 @@ final class Emulator {
 
     private func loadCore(_ name: String) -> Core? {
         if let core = cores[name] { return core }
-        guard let url = Bundle.main.url(forResource: name, withExtension: "libretro"), let core = Core(url: url) else { return nil }
+        let downloaded = library.coresFolder.appending(path: name + ".libretro")
+        guard let url = Bundle.main.url(forResource: name, withExtension: "libretro")
+                ?? (FileManager.default.fileExists(atPath: downloaded.path) ? downloaded : nil),
+              let core = Core(url: url) else { return nil }
         cores[name] = core
         return core
     }
@@ -504,6 +566,7 @@ final class Emulator {
 
     private func saveSRAM() {
         finishBatch()
+        if let game, GameSystem(rom: game) == .n3ds { return backUpThreeDSSave(for: game) } // it writes its own save files
         guard let core, let url = sramURL, let ptr = core.memoryData(UInt32(RETRO_MEMORY_SAVE_RAM)) else { return }
         let size = core.memorySize(UInt32(RETRO_MEMORY_SAVE_RAM))
         guard size > 0 else { return }
@@ -512,8 +575,128 @@ final class Emulator {
         do {
             try bytes.write(to: url, options: .atomic)
             lastSRAM = bytes
+            if let game { backUpSave(bytes, for: game) }
         } catch {
             NSLog("Saving \(url.path) failed: \(error)")
+        }
+    }
+
+    // MARK: Save backups
+
+    /// At most one backup this often, so they span hours of play rather than the last few minutes.
+    static var backupInterval: TimeInterval = 10 * 60
+    static let backupsKept = 20
+
+    private func backupFolder(for rom: URL) -> URL {
+        library.root.appending(path: "Saves/Backups").appending(path: rom.lastPathComponent)
+    }
+
+    /// Copies of a game's in-game save, newest first.
+    func saveBackups(for rom: URL) -> [(url: URL, date: Date)] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: backupFolder(for: rom), includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        return files.filter { $0.pathExtension == Self.saveExtension(for: rom) }
+            .compactMap { url in (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate).map { (url, $0) } }
+            .sorted { $0.date > $1.date }
+    }
+
+    /// Keeps a copy of the save every so often (the newest 20), so a corrupted or overwritten save can come back.
+    func backUpSave(_ bytes: Data, for rom: URL, force: Bool = false) {
+        let existing = saveBackups(for: rom)
+        if !force, let newest = existing.first, Date().timeIntervalSince(newest.date) < Self.backupInterval { return }
+        let folder = backupFolder(for: rom)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH.mm.ss.SSS"
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try bytes.write(to: folder.appending(path: formatter.string(from: Date()) + "." + Self.saveExtension(for: rom)), options: .atomic)
+        } catch {
+            return NSLog("Save backup failed: \(error)")
+        }
+        for old in saveBackups(for: rom).dropFirst(Self.backupsKept) { try? FileManager.default.removeItem(at: old.url) }
+    }
+
+    /// Puts a backup back as the game's save. The save it replaces is backed up first, so this can be undone too.
+    func restoreBackup(_ backup: URL, for rom: URL) throws {
+        let data = try Data(contentsOf: backup) // first: backing up the current save can prune the oldest backup
+        if rom == game { saveSRAM() }
+        if let current = currentSave(for: rom) { backUpSave(current, for: rom, force: true) }
+        try importSave(data, for: rom)
+    }
+
+    /// The save as one file: the save RAM file, or for 3DS a zip of the game's save folder.
+    private func currentSave(for rom: URL) -> Data? {
+        if GameSystem(rom: rom) == .n3ds { return threeDSSaveFolder(for: rom).flatMap(Self.zip) }
+        return try? Data(contentsOf: existingSaveFile(for: rom))
+    }
+
+    static func saveExtension(for rom: URL) -> String { GameSystem(rom: rom) == .n3ds ? "zip" : "srm" }
+
+    // MARK: 3DS saves
+
+    /// 3DS games keep their save as files on the emulator's SD card (Saves/Azahar/sdmc), not in save RAM. This is the
+    /// game's save folder there, found by the title ID in the game's header (it may not exist until the game saves).
+    func threeDSSaveFolder(for rom: URL) -> URL? {
+        guard GameSystem(rom: rom) == .n3ds, let id = Self.threeDSTitleID(rom) else { return nil }
+        let sd = library.root.appending(path: "Saves/Azahar/sdmc/Nintendo 3DS")
+        let title = String(format: "title/%08x/%08x/data", UInt32(id >> 32), UInt32(id & 0xFFFF_FFFF))
+        // Two folders named after the console come first: all zeros, unless Azahar was given a real 3DS's system files.
+        let fm = FileManager.default
+        for first in (try? fm.contentsOfDirectory(atPath: sd.path)) ?? [] {
+            for second in (try? fm.contentsOfDirectory(atPath: sd.appending(path: first).path)) ?? [] {
+                let folder = sd.appending(path: first).appending(path: second).appending(path: title)
+                if fm.fileExists(atPath: folder.path) { return folder }
+            }
+        }
+        let zeros = String(repeating: "0", count: 32)
+        return sd.appending(path: zeros).appending(path: zeros).appending(path: title)
+    }
+
+    /// The title ID in a 3DS game's header: a cartridge image's media ID (.3ds, .cci) or a program's ID (.cxi).
+    static func threeDSTitleID(_ rom: URL) -> UInt64? {
+        guard let file = try? FileHandle(forReadingFrom: rom) else { return nil }
+        defer { try? file.close() }
+        guard let header = try? file.read(upToCount: 0x200), header.count == 0x200 else { return nil }
+        func number(at offset: Int) -> UInt64 { header[offset..<offset + 8].reversed().reduce(0) { $0 << 8 | UInt64($1) } }
+        switch String(decoding: header[0x100..<0x104], as: UTF8.self) {
+        case "NCSD": return number(at: 0x108)
+        case "NCCH": return number(at: 0x118)
+        default: return nil
+        }
+    }
+
+    /// Backs up the 3DS game's save folder when it's changed, on the same schedule as save RAM backups.
+    func backUpThreeDSSave(for rom: URL) {
+        guard let folder = threeDSSaveFolder(for: rom),
+              let changed = (FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])?
+                  .compactMap { try? ($0 as? URL)?.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }.max()),
+              changed != lastThreeDSChange else { return }
+        if let newest = saveBackups(for: rom).first, Date().timeIntervalSince(newest.date) < Self.backupInterval { return }
+        guard let zip = Self.zip(folder) else { return }
+        lastThreeDSChange = changed
+        backUpSave(zip, for: rom, force: true)
+    }
+
+    /// A folder's contents as zip data.
+    static func zip(_ folder: URL) -> Data? {
+        let zip = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".zip")
+        defer { try? FileManager.default.removeItem(at: zip) }
+        guard AppUpdater.run("/usr/bin/ditto", ["-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--noacl", folder.path, zip.path]) else { return nil }
+        return try? Data(contentsOf: zip)
+    }
+
+    /// Replaces `folder` with the contents of a zip, in one step once it's unpacked.
+    static func unzip(_ data: Data, into folder: URL) throws {
+        let fm = FileManager.default
+        let zip = fm.temporaryDirectory.appending(path: UUID().uuidString + ".zip")
+        try data.write(to: zip)
+        defer { try? fm.removeItem(at: zip) }
+        try fm.createDirectory(at: folder.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let unpacked = folder.deletingLastPathComponent().appending(path: "unpacking-" + UUID().uuidString) // same disk: a rename
+        guard AppUpdater.run("/usr/bin/ditto", ["-x", "-k", zip.path, unpacked.path]) else { throw AppUpdater.UpdateError.unzip }
+        if fm.fileExists(atPath: folder.path) {
+            _ = try fm.replaceItemAt(folder, withItemAt: unpacked)
+        } else {
+            try fm.moveItem(at: unpacked, to: folder)
         }
     }
 
@@ -560,6 +743,15 @@ final class Emulator {
     /// The picture from where any game was left off, loaded or not (open games, Jump Back In).
     func resumeThumbnail(for rom: URL) -> NSImage? {
         existingStateURL(Self.autoSlot, ext: "png", for: rom).flatMap { NSImage(contentsOf: $0) }
+    }
+
+    /// Jump Back In and Open Games: the game as it is now (or was left off). DS and 3DS show just the top screen.
+    func continuePicture(for rom: URL) -> NSImage? {
+        let live = rom == game ? snapshot : nil
+        guard let picture = live ?? resumeThumbnail(for: rom)?.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let topScreen = [.nds, .n3ds].contains(GameSystem(rom: rom))
+            ? picture.cropping(to: CGRect(x: 0, y: 0, width: picture.width, height: picture.height / 2)) : nil
+        return NSImage(cgImage: topScreen ?? picture, size: .zero)
     }
 
     @discardableResult
@@ -644,25 +836,33 @@ final class Emulator {
     /// Copies the in-game save out, e.g. to use it in another emulator or on real hardware.
     func exportSave(for rom: URL, to destination: URL) throws {
         if rom == game { saveSRAM() }
-        let file = existingSaveFile(for: rom)
-        guard FileManager.default.fileExists(atPath: file.path) else { throw CocoaError(.fileReadNoSuchFile) }
-        try Data(contentsOf: file).write(to: destination, options: .atomic)
+        guard let save = currentSave(for: rom) else { throw CocoaError(.fileReadNoSuchFile) }
+        try save.write(to: destination, options: .atomic)
     }
 
     /// Replaces the in-game save with one from elsewhere. The resume point is dropped so the game boots from the
-    /// imported save (the current save is kept as a backup next to it).
+    /// imported save (the current save is kept as a backup next to it; for 3DS, in Save Backups).
     func importSave(from source: URL, for rom: URL) throws {
-        let data = try Data(contentsOf: source)
+        if GameSystem(rom: rom) == .n3ds, let current = currentSave(for: rom) { backUpSave(current, for: rom, force: true) }
+        try importSave(Data(contentsOf: source), for: rom)
+    }
+
+    func importSave(_ data: Data, for rom: URL) throws {
         let wasPlaying = rom == game
         if wasPlaying { stop() }
-        let file = saveFile(for: rom)
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if FileManager.default.fileExists(atPath: file.path) {
-            let backup = file.deletingPathExtension().appendingPathExtension("backup.srm")
-            try? FileManager.default.removeItem(at: backup)
-            try? FileManager.default.copyItem(at: file, to: backup)
+        if GameSystem(rom: rom) == .n3ds {
+            guard let folder = threeDSSaveFolder(for: rom) else { throw CocoaError(.fileReadCorruptFile) }
+            try Self.unzip(data, into: folder)
+        } else {
+            let file = saveFile(for: rom)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: file.path) {
+                let backup = file.deletingPathExtension().appendingPathExtension("backup.srm")
+                try? FileManager.default.removeItem(at: backup)
+                try? FileManager.default.copyItem(at: file, to: backup)
+            }
+            try data.write(to: file, options: .atomic)
         }
-        try data.write(to: file, options: .atomic)
         for legacy in [false, true] {
             for ext in ["state", "png"] {
                 if let auto = stateURL(Self.autoSlot, ext: ext, for: rom, legacy: legacy) { try? FileManager.default.removeItem(at: auto) }
@@ -694,7 +894,7 @@ final class Emulator {
     private func updateRewind() {
         let wants = holdingRewindKey || holdingRewindPad
         if wants && !canRewind && !rewindWarned {
-            show(rewindEnabled ? "Rewind works in Game Boy and GBA games" : "Rewind is off in Settings", "backward.fill")
+            show(rewindEnabled ? "Rewind isn't available in DS and 3DS games" : "Rewind is off in Settings", "backward.fill")
             rewindWarned = true
         }
         if !wants { rewindWarned = false }
@@ -755,7 +955,10 @@ final class Emulator {
     /// Saves the current picture, scaled up with sharp pixels, to ~/Pictures/Menu Bar Emulator.
     @discardableResult
     func screenshot() -> URL? {
-        guard let frame, let game else { return nil }
+        guard let frame, let game else {
+            show("Nothing to capture yet", "camera")
+            return nil
+        }
         let scale = frame.width < 300 ? 4 : 2
         let w = frame.width * scale, h = frame.height * scale
         guard let context = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
@@ -899,6 +1102,8 @@ final class Emulator {
 
     fileprivate func environment(_ cmd: UInt32, _ data: UnsafeMutableRawPointer?) -> Bool {
         guard let data else { return false }
+        var answer = false
+        if usesGPU && vkbridge_environment(cmd, data, &answer) { return answer }
         switch Int32(cmd) {
         case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY:
             data.assumingMemoryBound(to: UnsafePointer<CChar>?.self).pointee = UnsafePointer(biosDir)
@@ -966,6 +1171,9 @@ final class Emulator {
         // Homebrew DS games need an SD card (DLDI). Unanswered, melonDS DS turns it off; on, it makes
         // Saves/melonDS DS/dldi_sd_card.bin and mirrors it to the dldi_sd_card folder next to it.
         case "melonds_homebrew_sdcard": "enabled"
+        // 3DS on the GPU at twice its resolution, so 3D stays sharp in a bigger window (there's plenty of headroom).
+        case "citra_graphics_api": usesGPU ? "Vulkan" : "Software"
+        case "citra_resolution_factor": usesGPU ? "2" : "1"
         default: nil
         }
     }
@@ -984,7 +1192,9 @@ final class Emulator {
         var pixels = Data(count: bytesPerRow * height)
         pixels.withUnsafeMutableBytes { out in
             guard let base = out.baseAddress else { return }
-            if pixelFormat == RETRO_PIXEL_FORMAT_RGB565.rawValue {
+            if data == hardwareFrame {
+                vkbridge_read_frame(base, UInt32(width), UInt32(height))
+            } else if pixelFormat == RETRO_PIXEL_FORMAT_RGB565.rawValue {
                 var src = vImage_Buffer(data: UnsafeMutableRawPointer(mutating: data), height: vImagePixelCount(height),
                                         width: vImagePixelCount(width), rowBytes: pitch)
                 var dst = vImage_Buffer(data: base, height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: bytesPerRow)
@@ -1064,12 +1274,23 @@ final class Emulator {
         pressed = held.union(turbo)
     }
 
-    fileprivate func inputState(port: UInt32, device: UInt32, id: UInt32) -> Int16 {
+    fileprivate func inputState(port: UInt32, device: UInt32, index: UInt32, id: UInt32) -> Int16 {
         guard port == 0 else { return 0 }
         switch Int32(device) {
         case RETRO_DEVICE_JOYPAD:
-            if id == RETRO_DEVICE_ID_JOYPAD_MASK { return Int16(truncatingIfNeeded: pressed.reduce(0) { $0 | 1 << $1 }) }
-            return pressed.contains(id) ? 1 : 0
+            let buttons = arrowsAreCirclePad ? pressed.subtracting(Self.dpad) : pressed
+            if id == RETRO_DEVICE_ID_JOYPAD_MASK { return Int16(truncatingIfNeeded: buttons.reduce(0) { $0 | 1 << $1 }) }
+            return buttons.contains(id) ? 1 : 0
+        case RETRO_DEVICE_ANALOG:
+            guard arrowsAreCirclePad, Int32(index) == RETRO_DEVICE_INDEX_ANALOG_LEFT else { return 0 }
+            func axis(_ minus: Int32, _ plus: Int32) -> Int { (pressed.contains(UInt32(plus)) ? 1 : 0) - (pressed.contains(UInt32(minus)) ? 1 : 0) }
+            let x = axis(RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_RIGHT), y = axis(RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_DOWN)
+            let full = x != 0 && y != 0 ? 23_170 : 0x7fff // diagonals stay inside the stick's circle
+            switch Int32(id) {
+            case RETRO_DEVICE_ID_ANALOG_X: return Int16(x * full)
+            case RETRO_DEVICE_ID_ANALOG_Y: return Int16(y * full)
+            default: return 0
+            }
         case RETRO_DEVICE_POINTER:
             let pointer = batchInput?.pointer ?? pointer
             switch Int32(id) {
@@ -1105,9 +1326,11 @@ private let audioBatchCallback: retro_audio_sample_batch_t = { data, frames in
     return frames
 }
 private let inputPollCallback: retro_input_poll_t = { activeEmulator?.poll() }
-private let inputStateCallback: retro_input_state_t = { port, device, _, id in
-    activeEmulator?.inputState(port: port, device: device, id: id) ?? 0
+private let inputStateCallback: retro_input_state_t = { port, device, index, id in
+    activeEmulator?.inputState(port: port, device: device, index: index, id: id) ?? 0
 }
+/// RETRO_HW_FRAME_BUFFER_VALID: the frame is on the GPU, not in memory.
+private let hardwareFrame = UnsafeRawPointer(bitPattern: -1)
 
 /// The libretro functions of one core dylib, looked up with dlsym.
 private final class Core {
@@ -1197,14 +1420,39 @@ final class AudioPlayer {
     /// Times it ran dry, or had to jump ahead because it fell far behind.
     private(set) var underruns = 0, skips = 0
 
+    /// Between start() and stop(): the game wants sound.
+    private var active = false
+    private var deviceObserver: NSObjectProtocol?
+
     init() {
         left.initialize(repeating: 0, count: Self.capacity)
         right.initialize(repeating: 0, count: Self.capacity)
+        // AirPods connecting, headphones unplugged…: the engine stops itself on any output change, and the game went
+        // silent until the next pause. Start again on the new device.
+        deviceObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            self?.restartIfNeeded()
+        }
     }
 
     deinit {
+        if let deviceObserver { NotificationCenter.default.removeObserver(deviceObserver) }
         left.deallocate()
         right.deallocate()
+    }
+
+    /// Whether sound is going out right now (tests).
+    var isOutputRunning: Bool { engine.isRunning }
+
+    func restartIfNeeded() {
+        guard active, !engine.isRunning else { return }
+        clear()
+        do { try engine.start() } catch { NSLog("Audio failed to restart: \(error)") }
+    }
+
+    /// Stops the engine the way a device change does (tests).
+    func simulateDeviceChange() {
+        engine.stop()
+        NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: engine)
     }
 
     var volume: Float = 1 {
@@ -1212,6 +1460,7 @@ final class AudioPlayer {
     }
 
     func start(sampleRate: Double) {
+        active = true
         if node == nil || rate != sampleRate { build(sampleRate: sampleRate) }
         clear()
         guard !engine.isRunning else { return }
@@ -1219,6 +1468,7 @@ final class AudioPlayer {
     }
 
     func stop() {
+        active = false
         engine.pause()
         clear()
     }

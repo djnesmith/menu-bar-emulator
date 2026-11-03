@@ -10,6 +10,8 @@ final class Library {
     static let patchExtensions: Set<String> = ["ips", "ups", "bps"]
 
     let root: URL
+    /// Emulators downloaded after installing (the 3DS one).
+    var coresFolder: URL { root.appending(path: "Cores") }
     private(set) var roms: [URL] = []
     private(set) var bios: [URL] = []
     /// Apple II games on several disks, keyed by the first disk (the only one `roms` lists).
@@ -74,10 +76,13 @@ final class Library {
         for url in urls.flatMap(Self.expandingFolders) {
             let ext = url.pathExtension.lowercased()
             if Self.patchExtensions.contains(ext) { patches.append(url); continue }
-            let isROM = Self.romExtensions.contains(ext)
+            // Genesis games often come as .bin, which otherwise means a BIOS file: their header gives them away.
+            let genesisBin = ext == "bin" && Self.isGenesisROM(url)
+            let isROM = Self.romExtensions.contains(ext) || genesisBin
             guard isROM || Self.biosExtensions.contains(ext) else { continue }
             let dir = root.appending(path: isROM ? "ROMs" : "BIOS")
-            let dest = dir.appending(path: url.lastPathComponent)
+            let name = genesisBin ? url.deletingPathExtension().lastPathComponent + ".md" : url.lastPathComponent
+            let dest = dir.appending(path: name)
             // Never overwrite: a same-named file may hold the user's only copy.
             guard !fm.fileExists(atPath: dest.path) else { continue }
             do {
@@ -270,6 +275,14 @@ final class Library {
 
     // MARK: Files
 
+    /// A Mega Drive / Genesis cartridge says "SEGA" at 0x100 (sometimes 0x101).
+    static func isGenesisROM(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard (try? handle.seek(toOffset: 0x100)) != nil, let header = try? handle.read(upToCount: 16), header.count == 16 else { return false }
+        return String(decoding: header, as: UTF8.self).contains("SEGA")
+    }
+
     private static func expandingFolders(_ url: URL) -> [URL] {
         guard (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { return [url] }
         let files = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
@@ -297,6 +310,7 @@ struct Cheat: Codable, Identifiable, Equatable {
 /// The console a ROM is for, from its file extension. Raw values are saved (window scale per system), so keep them.
 enum GameSystem: String, CaseIterable, Identifiable {
     case gb, gbc, gba, nds, nes, snes, md, sms, gg, apple2
+    case n3ds = "3ds"
 
     var id: String { rawValue }
 
@@ -306,17 +320,18 @@ enum GameSystem: String, CaseIterable, Identifiable {
         self = system
     }
 
-    /// shortcut: Genesis .bin files aren't picked up (.bin means BIOS here); rename them to .md.
+    /// Genesis .bin files are recognized by their header on import and saved as .md (.bin otherwise means BIOS).
     var extensions: [String] {
         switch self {
         case .snes: ["sfc", "smc"]
         case .md: ["md", "gen"]
         case .apple2: ["dsk", "do", "po", "woz"]
+        case .n3ds: ["3ds", "cci", "cxi", "3dsx"]
         default: [rawValue]
         }
     }
 
-    /// The libretro core in the app bundle that plays it.
+    /// The libretro core that plays it: in the app bundle, or downloaded (3DS, see `ThreeDSSupport`).
     var core: String {
         switch self {
         case .gb, .gbc, .gba: "mgba"
@@ -326,6 +341,7 @@ enum GameSystem: String, CaseIterable, Identifiable {
         case .md: "clownmdemu"
         case .sms, .gg: "gearsystem"
         case .apple2: "applewin"
+        case .n3ds: "azahar"
         }
     }
 
@@ -340,6 +356,7 @@ enum GameSystem: String, CaseIterable, Identifiable {
         case .md: CGSize(width: 320, height: 224)
         case .sms: CGSize(width: 256, height: 192)
         case .apple2: CGSize(width: 560, height: 384)
+        case .n3ds: CGSize(width: 400, height: 480)
         }
     }
 
@@ -355,6 +372,7 @@ enum GameSystem: String, CaseIterable, Identifiable {
         case .sms: "SMS"
         case .gg: "GG"
         case .apple2: "Apple II"
+        case .n3ds: "3DS"
         }
     }
 
@@ -370,6 +388,7 @@ enum GameSystem: String, CaseIterable, Identifiable {
         case .sms: "Sega Master System"
         case .gg: "Sega Game Gear"
         case .apple2: "Apple IIe"
+        case .n3ds: "Nintendo 3DS"
         }
     }
 
@@ -385,6 +404,7 @@ enum GameSystem: String, CaseIterable, Identifiable {
         case .sms: 0x2F6FB8
         case .gg: 0x2E9C8F
         case .apple2: 0xB49A6A
+        case .n3ds: 0xC9424F
         }
     }
 }

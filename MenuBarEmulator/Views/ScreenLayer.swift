@@ -5,7 +5,8 @@ import QuartzCore
 /// SwiftUI never re-renders per frame. `crop` picks one DS screen out of the core's top-over-bottom frame; the bottom
 /// DS screen also takes the mouse as the stylus. Clicking anywhere else on the picture drags the window.
 struct ScreenLayer: NSViewRepresentable {
-    enum Crop { case full, top, bottom }
+    /// `narrowBottom` is the 3DS touch screen: 320 wide under the 400-wide top screen, so the bars beside it go.
+    enum Crop { case full, top, bottom, narrowBottom }
 
     let emulator: Emulator
     var crop: Crop = .full
@@ -48,7 +49,7 @@ final class ScreenView: NSView {
         didSet { if crop != oldValue, let source { show(source) } }
     }
     var filter: Display.Filter = .sharp {
-        didSet { picture.magnificationFilter = filter == .smooth ? .linear : .nearest }
+        didSet { picture.magnificationFilter = filter == .smooth || filter == .crt ? .linear : .nearest }
     }
     /// What's on screen (already cropped), also used when the view is drawn into an image.
     private(set) var current: CGImage?
@@ -68,6 +69,7 @@ final class ScreenView: NSView {
         wantsLayer = true
         layerContentsRedrawPolicy = .never
         picture.contentsGravity = .resize
+        picture.autoresizingMask = [.layerWidthSizable, .layerHeightSizable] // follows the view even when it isn't told
         picture.magnificationFilter = .nearest
         picture.minificationFilter = .trilinear
         picture.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
@@ -103,6 +105,11 @@ final class ScreenView: NSView {
         fitPicture()
     }
 
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        fitPicture()
+    }
+
     private func fitPicture() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -122,11 +129,15 @@ final class ScreenView: NSView {
         case .full: image
         case .top: image.cropping(to: CGRect(x: 0, y: 0, width: image.width, height: half))
         case .bottom: image.cropping(to: CGRect(x: 0, y: half, width: image.width, height: half))
+        case .narrowBottom: image.cropping(to: CGRect(x: image.width / 10, y: half, width: image.width * 8 / 10, height: half))
         }
         current = cropped
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         picture.contents = cropped
+        // Dragging the window's corner could leave the picture at an older, bigger size (Kian saw the 3DS screens spill
+        // past their views): every frame puts it back.
+        if picture.frame != bounds { picture.frame = bounds }
         CATransaction.commit()
     }
 
@@ -290,11 +301,31 @@ final class ScreenView: NSView {
 
     static func normalizedTouch(_ point: CGPoint, in size: CGSize, crop: ScreenLayer.Crop) -> CGPoint {
         let x = size.width > 0 ? point.x / size.width : 0, y = size.height > 0 ? point.y / size.height : 0
+        if crop == .narrowBottom { return CGPoint(x: 0.1 + x * 0.8, y: 0.5 + y / 2) }
         return CGPoint(x: x, y: (crop == .top ? 0 : 0.5) + y / 2)
     }
 }
 
 /// Thin dark lines between pixels, like an old handheld LCD. Skipped when pixels are too small to show it.
+/// CRT look for the home consoles: a dark scanline under every row of the picture and slightly darker edges.
+struct Scanlines: View {
+    let rows: Int
+
+    var body: some View {
+        Canvas { context, size in
+            let dy = size.height / CGFloat(rows)
+            guard dy >= 2 else { return }
+            var path = Path()
+            for j in 0..<rows { path.addRect(CGRect(x: 0, y: CGFloat(j) * dy + dy * 0.62, width: size.width, height: dy * 0.38)) }
+            context.fill(path, with: .color(.black.opacity(0.32)))
+            context.fill(Path(CGRect(origin: .zero, size: size)),
+                         with: .radialGradient(Gradient(colors: [.clear, .black.opacity(0.28)]), center: CGPoint(x: size.width / 2, y: size.height / 2),
+                                               startRadius: min(size.width, size.height) * 0.45, endRadius: max(size.width, size.height) * 0.75))
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 struct LCDGrid: View {
     let columns: Int
     let rows: Int

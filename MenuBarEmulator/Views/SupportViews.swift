@@ -391,3 +391,148 @@ struct SupporterSheet: View {
         if model.unlock(code) { model.sheet = nil } else { wrong = true }
     }
 }
+
+/// The automatic copies of a game's in-game save, newest first, each one a click from coming back.
+struct SaveBackupsSheet: View {
+    let model: AppModel
+    let rom: URL
+    @Environment(\.theme) private var theme
+    @State private var confirming: URL?
+
+    var body: some View {
+        let backups = model.emulator.saveBackups(for: rom)
+        SheetCard(title: "Save Backups", close: { model.sheet = nil }) {
+            Text("\(rom.gameTitle)'s in-game save is copied every 10 minutes you play (the newest \(Emulator.backupsKept) are kept). Restoring one backs up the current save first, so you can always go back.")
+                .font(.system(size: 12))
+                .foregroundStyle(theme.subtext)
+                .fixedSize(horizontal: false, vertical: true)
+            if backups.isEmpty {
+                Label("No backups yet. They start once the game has saved.", systemImage: "clock.arrow.circlepath")
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.subtext)
+                    .padding(.vertical, 8)
+            }
+            VStack(spacing: 0) {
+                ForEach(Array(backups.enumerated()), id: \.element.url) { index, backup in
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(backup.date.formatted(date: .abbreviated, time: .shortened)).font(.system(size: 12.5, weight: .medium))
+                            Text(backup.date.formatted(.relative(presentation: .named))).font(.system(size: 11)).foregroundStyle(theme.subtext)
+                        }
+                        Spacer(minLength: 6)
+                        Button(confirming == backup.url ? "Sure? Restore" : "Restore") { restore(backup.url) }
+                            .buttonStyle(PillButtonStyle(kind: confirming == backup.url ? .primary : .secondary))
+                            .focusable(false)
+                            .padFocusable("backup-\(index)", cornerRadius: 15) { restore(backup.url) }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    if index < backups.count - 1 { Rectangle().fill(theme.hairline).frame(height: 1).padding(.leading, 12) }
+                }
+            }
+            .card(12)
+        }
+    }
+
+    private func restore(_ backup: URL) {
+        guard confirming == backup else { confirming = backup; return }
+        do {
+            try model.emulator.restoreBackup(backup, for: rom)
+            model.sheet = nil
+            model.show("Save restored", "clock.arrow.circlepath")
+        } catch {
+            model.show("Couldn't restore that save", "exclamationmark.triangle.fill")
+        }
+    }
+}
+
+/// Shown once after updating: the new things, each in a line.
+struct WhatsNewSheet: View {
+    let model: AppModel
+    @Environment(\.theme) private var theme
+
+    private let items: [(symbol: String, title: String, detail: String)] = [
+        ("rectangle.split.1x2", "3DS games", "Open one, or Settings › General › 3DS games: a one-time 7 MB download. Arrows are the Circle Pad, the mouse is the stylus."),
+        ("clock.arrow.circlepath", "3DS save backups", "3DS saves are backed up every 10 minutes too, and export or import as a zip."),
+        ("rectangle.topthird.inset.filled", "Top screen in Jump back in", "DS and 3DS games show their top screen there."),
+    ]
+
+    var body: some View {
+        SheetCard(title: "What's new in \(AppModel.whatsNewVersion)", close: { model.sheet = nil }) {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(items, id: \.title) { item in
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: item.symbol)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(theme.accent)
+                            .frame(width: 30, height: 30)
+                            .background(Circle().fill(theme.accent.opacity(0.13)))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(item.title).font(theme.display(13, .semibold))
+                            Text(item.detail).font(.system(size: 11.5)).foregroundStyle(theme.subtext).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+            Button("Got It") { model.sheet = nil }
+                .buttonStyle(PillButtonStyle())
+                .focusable(false)
+                .keyboardShortcut(.defaultAction)
+                .padFocusable("whats-new-ok", cornerRadius: 15) { model.sheet = nil }
+                .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+/// 3DS games need the 3DS emulator, a separate one-time download. Starts the game you opened once it's in.
+struct ThreeDSSheet: View {
+    let model: AppModel
+    let rom: URL?
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        SheetCard(title: "Play 3DS Games", close: { model.sheet = nil }) {
+            Text("3DS games need one more thing: the 3DS emulator (Azahar, \(ThreeDSSupport.downloadSize)). It downloads straight from Azahar's GitHub, and only once.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(theme.subtext)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Games have to be decrypted copies of your own 3DS games (.3ds, .cci, .cxi or .3dsx). The arrow keys are the Circle Pad, and the mouse is the stylus on the bottom screen.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(theme.subtext)
+                .fixedSize(horizontal: false, vertical: true)
+            switch model.threeDS.state {
+            case .downloading(let fraction):
+                ProgressView(value: fraction)
+            case .installed:
+                button(rom.map { "Play \($0.gameTitle)" } ?? "Done", id: "three-ds-done", action: finish)
+            case .failed(let message):
+                Text(message).font(.system(size: 11)).foregroundStyle(theme.bad)
+                button("Try Again", id: "three-ds-download", action: download)
+            case .notInstalled:
+                button("Download", id: "three-ds-download", action: download)
+            }
+        }
+    }
+
+    private func button(_ title: String, id: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(PillButtonStyle())
+            .focusable(false)
+            .keyboardShortcut(.defaultAction)
+            .padFocusable(id, cornerRadius: 15, action: action)
+            .frame(maxWidth: .infinity)
+    }
+
+    private func download() {
+        model.threeDS.install { [model, rom] in
+            if model.sheet == .threeDS(rom) { finish(model: model, rom: rom) } // only if you're still waiting on it
+        }
+    }
+
+    private func finish() { finish(model: model, rom: rom) }
+
+    private func finish(model: AppModel, rom: URL?) {
+        model.sheet = nil
+        if let rom { model.play(rom) }
+    }
+}

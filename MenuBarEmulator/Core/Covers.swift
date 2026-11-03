@@ -126,6 +126,7 @@ final class Covers {
         case .sms: "Sega_-_Master_System_-_Mark_III"
         case .gg: "Sega_-_Game_Gear"
         case .apple2: nil // libretro-thumbnails has no Apple II set
+        case .n3ds: "Nintendo_-_Nintendo_3DS"
         }
         guard let repo else { return nil }
         // libretro-thumbnails replaces these characters in file names.

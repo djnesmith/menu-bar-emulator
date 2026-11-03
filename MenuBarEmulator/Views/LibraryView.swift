@@ -129,6 +129,9 @@ struct LibraryView: View {
                     if !model.library.roms.isEmpty {
                         ToolbarIcon(symbol: "magnifyingglass", label: "Search (⌘F, or just start typing)") { model.isSearching = true }
                     }
+                    if model.library.roms.count > 1 {
+                        ToolbarIcon(symbol: "shuffle", label: "Shuffle: play a random game") { model.playRandom() }
+                    }
                     ToolbarIcon(symbol: model.isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
                                 label: model.isFullScreen ? "Exit Full Screen (⌃⌘F)" : "Full Screen (⌃⌘F)") { model.toggleFullScreen() }
                     ToolbarIcon(symbol: "gearshape", label: "Settings (⌘,)") { model.openSettings() }
@@ -419,9 +422,7 @@ private struct ResumeCard: View {
         .focusable(false)
         .onHover { hover in withAnimation(.easeOut(duration: 0.15)) { hovering = hover } }
         .task(id: model.emulator.stateVersion) {
-            thumbnail = model.emulator.game == rom
-                ? model.emulator.snapshot.map { NSImage(cgImage: $0, size: .zero) } ?? model.emulator.resumeThumbnail(for: rom)
-                : model.emulator.resumeThumbnail(for: rom)
+            thumbnail = model.emulator.continuePicture(for: rom)
         }
         .accessibilityLabel("Continue \(rom.gameTitle)")
     }
@@ -495,6 +496,7 @@ private struct GameCard: View {
             if model.covers.hasCustom(rom) { Button("Use Default Picture") { model.covers.removeCustom(rom) } }
             Button("Apply Mod Patch…") { model.applyPatch(to: rom) }
             Divider()
+            Button("Save Backups…") { model.sheet = .saveBackups(rom) }
             Button("Export Save File…") { model.exportSave(for: rom) }
             Button("Import Save File…") { model.importSave(for: rom) }
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([rom]) }
