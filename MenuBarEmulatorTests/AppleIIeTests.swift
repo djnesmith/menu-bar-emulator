@@ -104,6 +104,27 @@ final class AppleIIeTests: EmulatorTestCase {
         XCTAssertEqual(emulator.disks, [], "no Change Disk for a one-disk game")
     }
 
+    /// The resume point from playing cap1 alone lists only cap1. Restoring it put that one-disk list back in AppleWin,
+    /// so after adding cap2 every swap failed.
+    func testSwappingDisksAfterAddingDiskTwo() throws {
+        let library = try libraryWithBlankDisks(["cap1.dsk"])
+        let emulator = makeEmulator(library)
+        emulator.play(try XCTUnwrap(library.roms.first))
+        emulator.stop()
+
+        let disk2 = temp.appending(path: "cap2.dsk")
+        try Data(count: 143_360).write(to: disk2)
+        library.importFiles([disk2])
+        emulator.play(try XCTUnwrap(library.roms.first))
+        defer { emulator.stop() }
+        XCTAssertEqual(emulator.disks.map(\.lastPathComponent), ["cap1.dsk", "cap2.dsk"])
+        var toasts: [String] = []
+        emulator.onToast = { text, _ in toasts.append(text) }
+        emulator.insertDisk(1)
+        emulator.insertDisk(0)
+        XCTAssertEqual(toasts, ["Disk 2: cap2", "Disk 1: cap1"], "disk 2 goes in although the resume point only knew disk 1")
+    }
+
     func testKeysBecomeLibretroKeys() throws {
         let a = try XCTUnwrap(RetroKey(key(0, "a")))
         XCTAssertEqual([a.code, a.character], [97, 97])

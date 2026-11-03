@@ -789,11 +789,31 @@ final class Emulator {
     func insertDisk(_ index: Int) {
         finishBatch()
         guard core != nil, let control = diskControl, disks.indices.contains(index) else { return }
-        let ok = control.set_eject_state?(true) == true && control.set_image_index?(UInt32(index)) == true
-            && control.set_eject_state?(false) == true
+        let ok = control.set_eject_state?(true) == true && restoreDiskList(control)
+            && control.set_image_index?(UInt32(index)) == true && control.set_eject_state?(false) == true
         readDisk()
         show(ok ? "Disk \(currentDisk + 1): \(disks[currentDisk].deletingPathExtension().lastPathComponent)" : "Couldn't change the disk",
              ok ? "opticaldiscdrive.fill" : "exclamationmark.triangle.fill")
+    }
+
+    /// A save state carries AppleWin's disk list, so loading one made before a disk was added drops that disk.
+    /// Puts every disk back, in order. AppleWin only takes this with the drive open, and refuses to replace a disk while
+    /// its own disk number is past the end of the list, so the missing disks are added first.
+    private func restoreDiskList(_ control: retro_disk_control_ext_callback) -> Bool {
+        while (control.get_num_images?() ?? 0) < UInt32(disks.count) {
+            if control.add_image_index?() != true { return false }
+        }
+        for (index, disk) in disks.enumerated() {
+            let i = UInt32(index)
+            var buffer = [CChar](repeating: 0, count: 4096)
+            if control.get_image_path?(i, &buffer, buffer.count) == true, String(cString: buffer) == disk.path { continue }
+            let replaced = disk.path.withCString { path in
+                var info = retro_game_info(path: path, data: nil, size: 0, meta: nil)
+                return control.replace_image_index?(i, &info) == true
+            }
+            if !replaced { return false }
+        }
+        return true
     }
 
     func nextDisk() {
